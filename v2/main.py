@@ -3,7 +3,9 @@ import requests
 from fastapi import FastAPI, Request, Query, Form
 from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
-from twilio.rest import ClientS
+from twilio.rest import Client
+from typing import Optional 
+import re
 import json
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
@@ -126,6 +128,24 @@ def send_interactive_buttons(to: str, body_text: str, buttons: list):
     resp = requests.post(url, json=data, headers=headers)
     if resp.status_code != 200:
         print("Failed to send interactive buttons:", resp.json())
+
+# ------- Twilio API Messaging
+def send_whatsapp_text_twilio(to: str, text: str):
+    """Send a WhatsApp text via Twilio."""
+    # Twilio 'to' must be in E.164 format, we'll ensure it
+    message = twilio_client.messages.create(
+        body=text,
+        from_=twilio_number,
+        to=f"whatsapp:{to}"
+    )
+
+# We'll make a unified send function that uses the appropriate one based on a flag
+def send_message(to: str, text: str, provider: str = "meta"):
+    if provider == "twilio":
+        # to must be E.164, e.g., +1234567890
+        send_whatsapp_text_twilio(to, text)
+    else:
+        send_whatsapp_text_meta(to, text)
 
 # ---------- Webhook Verification (Week 1 unchanged) ----------
 @app.get("/webhook")
