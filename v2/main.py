@@ -1,6 +1,6 @@
 import os
 import requests
-from fastapi import FastAPI, Request, Query
+from fastapi import FastAPI, Request, Query, Form
 from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
 import json
@@ -139,6 +139,7 @@ async def verify_webhook(
 # ---------- Main Webhook Handler ----------
 @app.post("/webhook")
 async def receive_message(request: Request):
+
     body = await request.json()
     # print("Incoming:", json.dumps(body, indent=2))  # debug if needed
 
@@ -227,3 +228,64 @@ async def receive_message(request: Request):
                                 send_text_message(from_number, error_msg)
 
     return PlainTextResponse("OK", status_code=200)
+@app.api_route("/webhook/twilio", methods=["GET", "POST"])
+async def twilio_webhook(request: Request):
+    """Handle incoming WhatsApp messages from Twilio."""
+    # Detect content type: form-encoded or JSON
+    if request.headers.get("content-type") == "application/json":
+        body = await request.json()
+    else:
+        form = await request.form()
+        # Convert form data to dict
+        body = dict(form)
+
+    # Extract essential fields
+    from_number = body.get("From", "")
+    if from_number.startswith("whatsapp:"):
+        # strip prefix for consistency, keep E.164
+        from_number = from_number.replace("whatsapp:", "")
+    msg_body = body.get("Body", "").strip()
+    
+    # Ensure user data exists
+    if from_number not in user_data:
+        user_data[from_number] = {"language": "unknown", "provider": "twilio"}
+    else:
+        user_data[from_number]["provider"] = "twilio"
+    
+    user_lang = user_data[from_number]["language"]
+    
+    # --- Language selection logic ---
+    if user_lang == "unknown" or msg_body.lower() in ["/start", "hello", "hi", "habari"]:
+        # Ask for language
+        send_message(
+            from_number,
+            "Karibu / Welcome to Legal Bot! Please choose your language:\n"
+            "Reply *1* for English\n"
+            "Reply *2* for Kiswahili",
+            provider="twilio"
+        )
+        return PlainTextResponse("OK", status_code=200)
+    
+    # Check if they are replying to language prompt
+    if msg_body == "1":
+        user_data[from_number]["language"] = "en"
+        send_message(from_number, "Language set to English. Ask your legal question.", "twilio")
+        return PlainTextResponse("OK")
+    elif msg_body == "2":
+        user_data[from_number]["language"] = "sw"
+        send_message(from_number, "Lugha imewekwa Kiswahili. Uliza swali lako la kisheria.", "twilio")
+        return PlainTextResponse("OK")
+    
+    # --- Process legal query (same as before) ---
+    # same answer_conversational call, but we need to provide phone and lang
+    try:
+        result = answer_conversational(msg_body, user_lang, from_number)
+        answer = result["answer"]
+        disclaimer = ... 
+        full_reply = answer + disclaimer  # same disclaimer logic
+        send_message(from_number, full_reply, "twilio")
+    except Exception as e:
+        print("Error:", e)
+        send_message(from_number, "Sorry, an error occurred.", "twilio")
+    
+    return PlainTextResponse("OK")
