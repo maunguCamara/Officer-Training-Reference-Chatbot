@@ -13,6 +13,7 @@ from langchain.vectorstores import Chroma
 
 DetectorFactory.seed = 0
 
+
 PDF_DIR = Path("data/pdfs")
 CHROMA_DB_DIR = Path("data/chroma_db")
 
