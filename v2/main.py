@@ -3,14 +3,17 @@ import requests
 from fastapi import FastAPI, Request, Query, Form
 from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
+from twilio.rest import ClientS
 import json
-
-load_dotenv()
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
+
+load_dotenv()
+twilio_client = Client(os.getenv("TWILIO_ACCCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
+twilio number = os.getenv("TWILIO_WHATSAPP_NUMBER")s
 
 app = FastAPI()
 
