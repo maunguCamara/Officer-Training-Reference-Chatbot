@@ -86,7 +86,7 @@ def update_vector_store(force_reload=False):
     print(f"Ingestion complete. {len(chunks)} chunks stored.")
     return vectordb
 
-    
+
 def build_topics_json():
     """Create data/topics.json – {filename: [ {id, title, page}, ... ]}"""
     import json
@@ -109,3 +109,22 @@ def build_topics_json():
     with open(Path("data/topics.json"), "w", encoding="utf-8") as f:
         json.dump(topics, f, indent=2)
     print("Saved topics.json")
+
+def assign_topic_metadata(docs, pdf_file, topics_json):
+    """Assign topic_title and topic_id to each document based on its page and TOC."""
+    book_topics = topics_json.get(pdf_file, [])
+    if not book_topics:
+        return docs
+    # Sort topics by page ascending
+    book_topics_sorted = sorted(book_topics, key=lambda x: x["page"])
+    for doc in docs:
+        page = doc.metadata["page"]
+        # Find the topic that starts at or before this page
+        assigned_topic = None
+        for t in book_topics_sorted:
+            if page >= t["page"]:
+                assigned_topic = t
+        if assigned_topic:
+            doc.metadata["topic_title"] = assigned_topic["title"]
+            doc.metadata["topic_id"] = assigned_topic["id"]
+    return docs
