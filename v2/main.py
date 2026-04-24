@@ -95,7 +95,7 @@ def set_state(phone, state):
 
 def get_state(phone):
     return user_data.get(phone, {}).get("state", "language_selection")
-    
+
 
 def get_user_language(phone: str) -> str:
     return user_data.get(phone, {}).get("language", "unknown")
@@ -144,54 +144,74 @@ def send_message(to: str, text: str, provider: str):
 
 # ========== Core Message Handler ==========
 def handle_message(phone: str, text: str, provider: str):
-    user = user_data.setdefault(phone, {"language": "unknown", "provider": provider})
-    lang = user["language"]
+    user = user_data.setdefault(phone, {"language": "en", "state": "language_selection"})
+    lang = user.get("language", "en")
 
-    # Admin refresh
-    if text.startswith("/refresh"):
-        parts = text.split(maxsplit=1)
-        if len(parts) != 2 or parts[1] != os.getenv("ADMIN_SECRET", "change_me_123"):
-            send_message(phone, "Unauthorized.", provider)
+    # Global commands (work at any time)
+    if text.strip().lower() == "menu":
+        if user.get("selected_book"):
+            # show topic list for the book again
+            show_topic_list(phone, provider)
             return
-        threading.Thread(target=refresh_knowledge, args=(phone, provider)).start()
-        return
-
-    # Language selection
-    if lang == "unknown" or text.lower().strip() in ("/start", "hello", "hi", "habari", "mambo"):
-        if provider == "meta":
-            send_meta_buttons(phone, "Welcome! Please choose your language:",
-                              [{"id": "lang_en", "title": "English"}, {"id": "lang_sw", "title": "Kiswahili"}])
         else:
-            send_message(phone, "Karibu / Welcome to Legal Bot! Please choose your language:\nReply *1* for English\nReply *2* for Kiswahili", provider)
+            show_book_list(phone, provider)
+            return
+
+    # State machine
+    state = user.get("state", "language_selection")
+
+    if state == "language_selection":
+        if text in ("1","2","3","4","5"):   # adjust to your language list
+            language_map = {"1":"en", "2":"sw", "3":"fr", "4":"de", "5":"pt"}  # example
+            chosen = language_map.get(text, "en")
+            user["language"] = chosen
+            user["state"] = "book_selection"
+            # Reply in chosen language
+            reply = get_localized("welcome_book_selection", lang)  # "Please pick a book:"
+            show_book_list(phone, provider)
+        else:
+            # re‑prompt language
+            send_message(phone, get_localized("choose_language", lang), provider)
         return
 
-    if text == "1":
-        user["language"] = "en"
-        send_message(phone, "Language set to English. Ask your legal question.", provider)
-        return
-    elif text == "2":
-        user["language"] = "sw"
-        send_message(phone, "Lugha imewekwa Kiswahili. Uliza swali lako la kisheria.", provider)
+    elif state == "book_selection":
+        # user sends a number for a book
+        num = text.strip()
+        books = list(topics.keys())   # topics loaded from JSON
+        try:
+            idx = int(num) - 1
+            book = books[idx]
+            user["selected_book"] = book
+            user["state"] = "topic_selection"
+            show_topic_list(phone, provider, book)
+        except (ValueError, IndexError):
+            send_message(phone, get_localized("invalid_choice", lang), provider)
         return
 
-    # Legal query
-    try:
-        result = ask_question(text, lang)
-        answer = result["answer"]
-        disclaimer = (
-            "\n\n---\n*Tahadhari: Hii siyo ushauri wa kisheria. Wasiliana na wakili kwa mwongozo rasmi.*"
-            if lang == "sw" else
-            "\n\n---\n*Disclaimer: This is not legal advice. Consult a qualified lawyer for official guidance.*"
-        )
-        full_reply = answer + disclaimer
-        if len(full_reply) > 4000:
-            full_reply = full_reply[:4000] + "\n... (message truncated)"
-        send_message(phone, full_reply, provider)
-    except Exception as e:
-        print("QA error:", e)
-        err_msg = "Samahani, kuna hitilafu." if lang == "sw" else "Sorry, an error occurred."
-        send_message(phone, err_msg, provider)
+    elif state == "topic_selection":
+        num = text.strip()
+        book = user.get("selected_book")
+        if not book:
+            send_message(phone, "Error. Type menu.", provider)
+            return
+        topics_list = topics.get(book, [])
+        try:
+            idx = int(num) - 1
+            topic = topics_list[idx]
+            user["selected_topic"] = topic
+            user["state"] = "chatting"
+            # show summary + suggested questions
+            send_topic_summary(phone, provider, book, topic)
+        except (ValueError, IndexError):
+            send_message(phone, get_localized("invalid_choice", lang), provider)
+        return
 
+    elif state == "chatting":
+        # Free‑text RAG with book/topic filter
+        answer = ask_with_context(phone, text)   # filter by book + topic
+        disclaimer = get_localized("disclaimer", lang)
+        send_message(phone, answer + disclaimer, provider)
+        return
 def refresh_knowledge(phone, provider):
     from ingestion import update_vector_store
     try:
