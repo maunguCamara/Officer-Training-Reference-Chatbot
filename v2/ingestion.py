@@ -69,12 +69,16 @@ def add_language_metadata(chunks):
 def update_vector_store(force_reload=False):
     """Run the full ingestion pipeline and replace the Chroma DB."""
     print("Starting PDF ingestion...")
+    import json
+    with open(Path("data/topics.json"), "r", encoding="utf-8") as f:
+        topics_json = json.load(f)
     if CHROMA_DB_DIR.exists() and force_reload:
         shutil.rmtree(CHROMA_DB_DIR)
     
     raw_docs = extract_text_from_pdfs()
     chunks = split_documents(raw_docs)
     chunks = add_language_metadata(chunks)
+    chunks = assign_topic_metadata(chunks, topics_json)
 
     # Use the globally defined `embeddings` (set by LLM_PROVIDER)
     vectordb = Chroma.from_documents(
@@ -110,17 +114,14 @@ def build_topics_json():
         json.dump(topics, f, indent=2)
     print("Saved topics.json")
 
-def assign_topic_metadata(docs, pdf_file, topics_json):
-    """Assign topic_title and topic_id to each document based on its page and TOC."""
-    book_topics = topics_json.get(pdf_file, [])
-    if not book_topics:
-        return docs
-    # Sort topics by page ascending
-    book_topics_sorted = sorted(book_topics, key=lambda x: x["page"])
+def assign_topic_metadata(docs, topics_json):
     for doc in docs:
-        page = doc.metadata["page"]
-        # Find the topic that starts at or before this page
+        source = doc.metadata.get("source", "")
+        book_topics = topics_json.get(source, [])
+        page = doc.metadata.get("page", 1)
         assigned_topic = None
+        # topics already sorted by page, but ensure
+        book_topics_sorted = sorted(book_topics, key=lambda x: x["page"])
         for t in book_topics_sorted:
             if page >= t["page"]:
                 assigned_topic = t
