@@ -85,3 +85,27 @@ def update_vector_store(force_reload=False):
     vectordb.persist()
     print(f"Ingestion complete. {len(chunks)} chunks stored.")
     return vectordb
+
+    
+def build_topics_json():
+    """Create data/topics.json – {filename: [ {id, title, page}, ... ]}"""
+    import json
+    topics = {}
+    for pdf_file in PDF_DIR.glob("*.pdf"):
+        doc = fitz.open(pdf_file)
+        toc = doc.get_toc()    # [[level, title, page], ...]
+        doc.close()
+        if not toc:
+            # fallback: use file name as single "topic"
+            topics[pdf_file.name] = [{"id": "1", "title": pdf_file.stem, "page": 1}]
+            continue
+        # build flat list from TOC (only level 1 or 2 headings)
+        chapter_list = []
+        for i, (level, title, page) in enumerate(toc, start=1):
+            # keep only top-level headings; adjust as needed
+            if level <= 2:
+                chapter_list.append({"id": str(i), "title": title.strip(), "page": page})
+        topics[pdf_file.name] = chapter_list
+    with open(Path("data/topics.json"), "w", encoding="utf-8") as f:
+        json.dump(topics, f, indent=2)
+    print("Saved topics.json")
