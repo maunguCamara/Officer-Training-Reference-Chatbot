@@ -10,3 +10,6 @@ pymupdf
 langdetect
 tiktoken
 twilio
+langchain-ollama
+langchain-huggingface
+sentence-transformers

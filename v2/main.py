@@ -9,6 +9,8 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
+    from langchain_ollama import OllamLLM
+    from langchain_huggingface impport HuggingFaceEmbeddings
 
 load_dotenv()
 
@@ -23,14 +25,31 @@ ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
 VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN", "my_custom_verify_token_123")
 CHROMA_DB_DIR = "data/chroma_db"
+LLM_PROVIDER = os.getenv("LLM_PRVOVIDER", "openai").lower()
+
+
+if LLM_PROVIDER == "ollama":
+
+    #Can also use Bedrock, etc. 
+    llm = OllamaLLM(model="llama3.2:1b", temperature=0)
+    embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-m3",
+        model_kwargs={"device":"cpu"},
+        encode_kwargs={"normalize_embeddings": True}
+        )
+    #small, supports EN well, for better multilingual, use 
+    # "intfloat/multilingual-e5-large" 
+    print("Using free local LLM (Ollama) and HuggingFace embeddings.")
+else:
+    #Original OpenAI setup
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
+    print("Using OpenAI LLM and embeddings.")
 
 # ---------- Global LLM & vector store ----------
 print("Loading vector store...")
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 vectorstore = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings)
 retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
-
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
 template = """You are a legal training assistant. ... (same prompt) ..."""
 QA_PROMPT = PromptTemplate(template=template, input_variables=["context", "question", "user_language"])
