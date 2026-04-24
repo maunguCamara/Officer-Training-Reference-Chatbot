@@ -90,6 +90,13 @@ app = FastAPI()
 # ========== User data (in-memory) ==========
 user_data = {}
 
+def set_state(phone, state):
+    user_data.setdefault(phone, {})["state"] = state
+
+def get_state(phone):
+    return user_data.get(phone, {}).get("state", "language_selection")
+    
+
 def get_user_language(phone: str) -> str:
     return user_data.get(phone, {}).get("language", "unknown")
 
