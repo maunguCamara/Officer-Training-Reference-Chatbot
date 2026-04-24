@@ -7,12 +7,17 @@ load_dotenv()
 
 import fitz
 from langdetect import detect, DetectorFactory
-from langchain.schema import Document
+from langchain_core.documents import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
-from langchain.vectorstores import Chroma
+from langchain_community.vectorstores import Chroma
 
 DetectorFactory.seed = 0
+
+PDF_DIR = Path("data/pdfs")
+CHROMA_DB_DIR = Path("data/chroma_db")
+
+
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
 
 if LLM_PROVIDER == "ollama":
@@ -26,8 +31,6 @@ else:
     from langchain_openai import OpenAIEmbeddings
     embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 
-PDF_DIR = Path("data/pdfs")
-CHROMA_DB_DIR = Path("data/chroma_db")
 
 def extract_text_from_pdfs(pdf_dir=PDF_DIR):
     all_docs = []
@@ -68,13 +71,15 @@ def update_vector_store(force_reload=False):
     print("Starting PDF ingestion...")
     if CHROMA_DB_DIR.exists() and force_reload:
         shutil.rmtree(CHROMA_DB_DIR)
+    
     raw_docs = extract_text_from_pdfs()
     chunks = split_documents(raw_docs)
     chunks = add_language_metadata(chunks)
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
+
+    # Use the globally defined `embeddings` (set by LLM_PROVIDER)
     vectordb = Chroma.from_documents(
         documents=chunks,
-        embedding=embeddings,
+        embedding=embeddings,           # <--- changed from hardcoded OpenAIEmbeddings
         persist_directory=str(CHROMA_DB_DIR)
     )
     vectordb.persist()
