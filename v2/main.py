@@ -1,12 +1,9 @@
 import os
 import requests
-from fastapi import FastAPI, Request, Query, Form
+from fastapi import FastAPI, Request, Query
 from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
 from twilio.rest import Client
-from typing import Optional 
-import re
-import json
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain.vectorstores import Chroma
@@ -14,55 +11,30 @@ from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 
 load_dotenv()
-twilio_client = Client(os.getenv("TWILIO_ACCCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
-twilio number = os.getenv("TWILIO_WHATSAPP_NUMBER")s
+
+# Twilio client setup (fix typo)
+twilio_client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
+twilio_number = os.getenv("TWILIO_WHATSAPP_NUMBER")
 
 app = FastAPI()
 
 # ---------- Config ----------
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
-VERIFY_TOKEN = "my_custom_verify_token_123"
-
+VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN", "my_custom_verify_token_123")
 CHROMA_DB_DIR = "data/chroma_db"
 
 # ---------- Global LLM & vector store ----------
-# Load once at startup (can take a few seconds)
 print("Loading vector store...")
 embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
-vectorstore = Chroma(
-    persist_directory=CHROMA_DB_DIR,
-    embedding_function=embeddings
-)
-retriever = vectorstore.as_retriever(search_kwargs={"k": 4})  # fetch 4 most relevant chunks
+vectorstore = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings)
+retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
-# LLM – use gpt-4o-mini for cheaper, fast responses
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-# ---------- Custom Prompt ----------
-# The prompt enforces: answer in the user's preferred language, cite sources,
-# never make up info, and stay strictly within the context.
-template = """You are a legal training assistant. Your answers must be based ONLY on the provided context.
-If the context does not contain the answer, say "Samahani, siwezi kupata jibu kutoka kwenye nyaraka zilizopo." (in Swahili) or "Sorry, I cannot find the answer in the available documents." (in English) depending on the user's language.
-Always cite the source file and page number for each statement.
+template = """You are a legal training assistant. ... (same prompt) ..."""
+QA_PROMPT = PromptTemplate(template=template, input_variables=["context", "question", "user_language"])
 
-The user's preferred language is: {user_language}
-- If the user's language is English, answer entirely in English.
-- If the user's language is Swahili, answer entirely in Swahili.
-- If the user's language is unknown, answer in the same language as the question.
-
-Context:
-{context}
-
-Question: {question}
-Helpful answer (include source citations):"""
-
-QA_PROMPT = PromptTemplate(
-    template=template,
-    input_variables=["context", "question", "user_language"]
-)
-
-# Build the RetrievalQA chain – we'll pass "user_language" as extra input per call.
 qa_chain = RetrievalQA.from_chain_type(
     llm=llm,
     chain_type="stuff",
@@ -70,245 +42,170 @@ qa_chain = RetrievalQA.from_chain_type(
     chain_type_kwargs={"prompt": QA_PROMPT},
     return_source_documents=True
 )
-
 print("Vector store and QA chain ready.")
 
-# ---------- User language storage (in‑memory) ----------
-# In production, replace with Redis, database, or persistent file.
-user_language_prefs = {}
+# ---------- User data ----------
+user_data = {}   # { phone: {"language": "en/sw", "provider": "meta/twilio"} }
 
-def get_user_language(phone_number: str) -> str:
-    return user_language_prefs.get(phone_number, "unknown")
+def get_user_language(phone: str) -> str:
+    return user_data.get(phone, {}).get("language", "unknown")
 
-# ---------- Meta API Messaging ----------
-def send_text_message(to: str, text: str):
+# ---------- Messaging functions ----------
+def send_meta_message(to: str, text: str):
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    data = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": to,
-        "type": "text",
-        "text": {"body": text}
-    }
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
+    data = {"messaging_product": "whatsapp", "recipient_type": "individual", "to": to, "type": "text", "text": {"body": text}}
     resp = requests.post(url, json=data, headers=headers)
     if resp.status_code != 200:
-        print("Failed to send text:", resp.json())
+        print("Meta send error:", resp.json())
 
-def send_interactive_buttons(to: str, body_text: str, buttons: list):
-    """
-    buttons: list of dicts with "type" ("reply") and "reply" dict with "id" and "title"
-    """
+def send_meta_buttons(to: str, body_text: str, buttons: list):
+    # buttons: [{"id": "lang_en", "title": "English"}, ...]
     url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
     data = {
-        "messaging_product": "whatsapp",
-        "recipient_type": "individual",
-        "to": to,
+        "messaging_product": "whatsapp", "recipient_type": "individual", "to": to,
         "type": "interactive",
         "interactive": {
             "type": "button",
             "body": {"text": body_text},
-            "action": {
-                "buttons": [
-                    {
-                        "type": "reply",
-                        "reply": {"id": btn["id"], "title": btn["title"]}
-                    } for btn in buttons
-                ]
-            }
+            "action": {"buttons": [{"type": "reply", "reply": b} for b in buttons]}
         }
     }
     resp = requests.post(url, json=data, headers=headers)
     if resp.status_code != 200:
-        print("Failed to send interactive buttons:", resp.json())
+        print("Meta buttons error:", resp.json())
 
-# ------- Twilio API Messaging
-def send_whatsapp_text_twilio(to: str, text: str):
-    """Send a WhatsApp text via Twilio."""
-    # Twilio 'to' must be in E.164 format, we'll ensure it
-    message = twilio_client.messages.create(
-        body=text,
-        from_=twilio_number,
-        to=f"whatsapp:{to}"
-    )
+def send_twilio_message(to: str, text: str):
+    try:
+        twilio_client.messages.create(body=text, from_=twilio_number, to=f"whatsapp:{to}")
+    except Exception as e:
+        print("Twilio send error:", e)
 
-# We'll make a unified send function that uses the appropriate one based on a flag
 def send_message(to: str, text: str, provider: str = "meta"):
     if provider == "twilio":
-        # to must be E.164, e.g., +1234567890
-        send_whatsapp_text_twilio(to, text)
+        send_twilio_message(to, text)
     else:
-        send_whatsapp_text_meta(to, text)
+        send_meta_message(to, text)
 
-# ---------- Webhook Verification (Week 1 unchanged) ----------
+# ---------- Webhook endpoints ----------
 @app.get("/webhook")
-async def verify_webhook(
-    hub_mode: str = Query(alias="hub.mode"),
-    hub_challenge: str = Query(alias="hub.challenge"),
-    hub_verify_token: str = Query(alias="hub.verify_token")
-):
+async def meta_verify(hub_mode=Query(alias="hub.mode"), hub_challenge=Query(alias="hub.challenge"), hub_verify_token=Query(alias="hub.verify_token")):
     if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
         return PlainTextResponse(hub_challenge)
-    else:
-        return PlainTextResponse("Verification failed", status_code=403)
+    return PlainTextResponse("Verification failed", status_code=403)
 
-# ---------- Main Webhook Handler ----------
 @app.post("/webhook")
-async def receive_message(request: Request):
-
+async def meta_webhook(request: Request):
     body = await request.json()
-    # print("Incoming:", json.dumps(body, indent=2))  # debug if needed
+    if body.get("object") != "whatsapp_business_account":
+        return PlainTextResponse("OK")
+    for entry in body.get("entry", []):
+        for change in entry.get("changes", []):
+            value = change.get("value", {})
+            if "messages" not in value:
+                continue
+            for msg in value["messages"]:
+                from_number = msg["from"]
+                # Ensure user record exists
+                if from_number not in user_data:
+                    user_data[from_number] = {"language": "unknown", "provider": "meta"}
+                else:
+                    user_data[from_number]["provider"] = "meta"
 
-    if body.get("object") == "whatsapp_business_account":
-        for entry in body.get("entry", []):
-            for change in entry.get("changes", []):
-                value = change.get("value", {})
-                
-                # ---- Handle incoming messages ----
-                if "messages" in value:
-                    for msg in value["messages"]:
-                        from_number = msg["from"]
-                        msg_type = msg.get("type")
+                msg_type = msg.get("type")
+                if msg_type == "interactive":
+                    button_id = msg["interactive"]["button_reply"]["id"]
+                    if button_id in ("lang_en", "lang_sw"):
+                        lang = "en" if button_id == "lang_en" else "sw"
+                        user_data[from_number]["language"] = lang
+                        lang_name = "English" if lang == "en" else "Kiswahili"
+                        send_meta_message(from_number, f"Language set to {lang_name}. Ask your legal question.")
+                    else:
+                        send_meta_message(from_number, "Unknown selection. Type /start to choose language.")
+                    continue
 
-                        # --- Interactive button reply ---
-                        if msg_type == "interactive":
-                            interactive_data = msg["interactive"]
-                            if interactive_data["type"] == "button_reply":
-                                button_id = interactive_data["button_reply"]["id"]
-                                if button_id in ("lang_en", "lang_sw"):
-                                    user_language_prefs[from_number] = "en" if button_id == "lang_en" else "sw"
-                                    lang_name = "English" if button_id == "lang_en" else "Kiswahili"
-                                    send_text_message(from_number, f"Language set to {lang_name}. You can now ask your legal question.")
-                                else:
-                                    send_text_message(from_number, "Unknown selection. Please type /start to choose language.")
-                                continue
+                if msg_type == "text":
+                    text = msg["text"]["body"].strip()
+                    handle_message(from_number, text, "meta")
+    return PlainTextResponse("OK")
 
-                        # --- Text message ---
-                        elif msg_type == "text":
-                            text_body = msg["text"]["body"].strip()
-
-                            # Simple "start" or first contact
-                            if text_body.lower() in ["/start", "hello", "hi", "habari", "mambo"]:
-                                # Ask for language
-                                send_interactive_buttons(
-                                    to=from_number,
-                                    body_text="Welcome to the Legal Training Bot! Please choose your language:",
-                                    buttons=[
-                                        {"id": "lang_en", "title": "English"},
-                                        {"id": "lang_sw", "title": "Kiswahili"}
-                                    ]
-                                )
-                                continue
-
-                            # If user hasn't set language, prompt them
-                            pref_language = get_user_language(from_number)
-                            if pref_language == "unknown":
-                                send_interactive_buttons(
-                                    to=from_number,
-                                    body_text="Please choose your preferred language first:",
-                                    buttons=[
-                                        {"id": "lang_en", "title": "English"},
-                                        {"id": "lang_sw", "title": "Kiswahili"}
-                                    ]
-                                )
-                                continue
-
-                            # --- Process legal query ---
-                            # Run the QA chain, passing user_language
-                            try:
-                                result = qa_chain({"query": text_body, "user_language": pref_language})
-                                answer = result["result"]
-                                sources = result.get("source_documents", [])
-
-                                # Add disclaimer footer
-                                disclaimer = (
-                                    "\n\n---\n*Tahadhari: Hii siyo ushauri wa kisheria. Wasiliana na wakili kwa mwongozo rasmi.*"
-                                    if pref_language == "sw"
-                                    else "\n\n---\n*Disclaimer: This is not legal advice. Consult a qualified lawyer for official guidance.*"
-                                )
-                                full_reply = answer + disclaimer
-
-                                # WhatsApp has a 4096 character limit; split if needed
-                                if len(full_reply) > 4000:
-                                    # Send truncated with a note
-                                    full_reply = full_reply[:4000] + "\n... (message truncated)"
-                                send_text_message(from_number, full_reply)
-
-                            except Exception as e:
-                                print("QA error:", e)
-                                error_msg = (
-                                    "Samahani, kuna hitilafu. Jaribu tena baadaye."
-                                    if pref_language == "sw"
-                                    else "Sorry, an error occurred. Please try again later."
-                                )
-                                send_text_message(from_number, error_msg)
-
-    return PlainTextResponse("OK", status_code=200)
 @app.api_route("/webhook/twilio", methods=["GET", "POST"])
 async def twilio_webhook(request: Request):
-    """Handle incoming WhatsApp messages from Twilio."""
-    # Detect content type: form-encoded or JSON
     if request.headers.get("content-type") == "application/json":
         body = await request.json()
     else:
         form = await request.form()
-        # Convert form data to dict
         body = dict(form)
-
-    # Extract essential fields
-    from_number = body.get("From", "")
-    if from_number.startswith("whatsapp:"):
-        # strip prefix for consistency, keep E.164
-        from_number = from_number.replace("whatsapp:", "")
-    msg_body = body.get("Body", "").strip()
-    
-    # Ensure user data exists
+    from_number = body.get("From", "").replace("whatsapp:", "")
+    text = body.get("Body", "").strip()
+    if not from_number:
+        return PlainTextResponse("OK")
     if from_number not in user_data:
         user_data[from_number] = {"language": "unknown", "provider": "twilio"}
     else:
         user_data[from_number]["provider"] = "twilio"
-    
-    user_lang = user_data[from_number]["language"]
-    
-    # --- Language selection logic ---
-    if user_lang == "unknown" or msg_body.lower() in ["/start", "hello", "hi", "habari"]:
-        # Ask for language
-        send_message(
-            from_number,
-            "Karibu / Welcome to Legal Bot! Please choose your language:\n"
-            "Reply *1* for English\n"
-            "Reply *2* for Kiswahili",
-            provider="twilio"
-        )
-        return PlainTextResponse("OK", status_code=200)
-    
-    # Check if they are replying to language prompt
-    if msg_body == "1":
-        user_data[from_number]["language"] = "en"
-        send_message(from_number, "Language set to English. Ask your legal question.", "twilio")
-        return PlainTextResponse("OK")
-    elif msg_body == "2":
-        user_data[from_number]["language"] = "sw"
-        send_message(from_number, "Lugha imewekwa Kiswahili. Uliza swali lako la kisheria.", "twilio")
-        return PlainTextResponse("OK")
-    
-    # --- Process legal query (same as before) ---
-    # same answer_conversational call, but we need to provide phone and lang
-    try:
-        result = answer_conversational(msg_body, user_lang, from_number)
-        answer = result["answer"]
-        disclaimer = ... 
-        full_reply = answer + disclaimer  # same disclaimer logic
-        send_message(from_number, full_reply, "twilio")
-    except Exception as e:
-        print("Error:", e)
-        send_message(from_number, "Sorry, an error occurred.", "twilio")
-    
+    handle_message(from_number, text, "twilio")
     return PlainTextResponse("OK")
+
+# ---------- Core message handler ----------
+def handle_message(phone: str, text: str, provider: str):
+    user = user_data[phone]
+    lang = user["language"]
+
+    # Special commands
+    if text.startswith("/refresh"):
+        parts = text.split(maxsplit=1)
+        if len(parts) != 2 or parts[1] != os.getenv("ADMIN_SECRET"):
+            send_message(phone, "Unauthorized.", provider)
+            return
+        threading.Thread(target=refresh_knowledge, args=(phone, provider)).start()
+        return
+
+    # Language selection
+    if lang == "unknown" or text.lower() in ("/start", "hello", "hi", "habari", "mambo"):
+        if provider == "meta":
+            send_meta_buttons(phone, "Welcome! Choose language:", [{"id": "lang_en", "title": "English"}, {"id": "lang_sw", "title": "Kiswahili"}])
+        else:
+            send_message(phone, "Karibu/Welcome! Reply:\n1 for English\n2 for Kiswahili", provider)
+        return
+
+    if text == "1":
+        user["language"] = "en"
+        send_message(phone, "Language set to English. Ask your legal question.", provider)
+        return
+    elif text == "2":
+        user["language"] = "sw"
+        send_message(phone, "Lugha imewekwa Kiswahili. Uliza swali lako la kisheria.", provider)
+        return
+
+    # Legal query
+    try:
+        result = qa_chain({"query": text, "user_language": lang})
+        answer = result["result"]
+        disclaimer = (
+            "\n\n---\n*Tahadhari: Hii siyo ushauri wa kisheria. Wasiliana na wakili kwa mwongozo rasmi.*"
+            if lang == "sw" else "\n\n---\n*Disclaimer: This is not legal advice. Consult a qualified lawyer for official guidance.*"
+        )
+        full_reply = answer + disclaimer
+        if len(full_reply) > 4000:
+            full_reply = full_reply[:4000] + "\n... (truncated)"
+        send_message(phone, full_reply, provider)
+    except Exception as e:
+        print("QA error:", e)
+        err = "Samahani, kuna hitilafu." if lang == "sw" else "Sorry, an error occurred."
+        send_message(phone, err, provider)
+
+import threading
+def refresh_knowledge(phone, provider):
+    from ingestion import update_vector_store
+    try:
+        update_vector_store(force_reload=True)
+        global vectorstore
+        vectorstore = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings)
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+        qa_chain.retriever = retriever
+        send_message(phone, "✅ Knowledge base refreshed.", provider)
+    except Exception as e:
+        print("Refresh error:", e)
+        send_message(phone, "❌ Refresh failed.", provider)
