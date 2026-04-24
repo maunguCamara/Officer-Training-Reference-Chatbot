@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 requests
 python-dotenv
+python-multipart
 langchain
 langchain_classic
 langchain-community

@@ -1,4 +1,5 @@
 # ingestion.py
+import os
 import shutil
 from pathlib import Path
 from dotenv import load_dotenv
@@ -12,7 +13,18 @@ from langchain_openai import OpenAIEmbeddings
 from langchain.vectorstores import Chroma
 
 DetectorFactory.seed = 0
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
 
+if LLM_PROVIDER == "ollama":
+    from langchain_huggingface import HuggingFaceEmbeddings
+    embeddings = HuggingFaceEmbeddings(
+        model_name="BAAI/bge-m3",
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True}
+    )
+else:
+    from langchain_openai import OpenAIEmbeddings
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 
 PDF_DIR = Path("data/pdfs")
 CHROMA_DB_DIR = Path("data/chroma_db")
