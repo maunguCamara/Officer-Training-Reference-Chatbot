@@ -3,6 +3,7 @@ uvicorn[standard]
 requests
 python-dotenv
 langchain
+langchain_classic
 langchain-community
 langchain-openai
 chromadb
@@ -13,3 +14,5 @@ twilio
 langchain-ollama
 langchain-huggingface
 sentence-transformers
+langchain_chroma
+langchain_core
