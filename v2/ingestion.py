@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
-
+import json
 import fitz
 from langdetect import detect, DetectorFactory
 from langchain_core.documents import Document
@@ -67,33 +67,36 @@ def add_language_metadata(chunks):
     return chunks
 
 def update_vector_store(force_reload=False):
-    """Run the full ingestion pipeline and replace the Chroma DB."""
     print("Starting PDF ingestion...")
-    import json
-    with open(Path("data/topics.json"), "r", encoding="utf-8") as f:
-        topics_json = json.load(f)
     if CHROMA_DB_DIR.exists() and force_reload:
         shutil.rmtree(CHROMA_DB_DIR)
-    
+
+    # 1. Build / refresh topics.json first
+    build_topics_json()                         # creates data/topics.json
+    with open(Path("data/topics.json"), "r", encoding="utf-8") as f:
+        topics_json = json.load(f)
+
+    # 2. Extract and chunk documents
     raw_docs = extract_text_from_pdfs()
     chunks = split_documents(raw_docs)
-    chunks = add_language_metadata(chunks)
-    chunks = assign_topic_metadata(chunks, topics_json)
 
-    # Use the globally defined `embeddings` (set by LLM_PROVIDER)
+    # 3. Add language and topic metadata
+    chunks = add_language_metadata(chunks)
+    chunks = assign_topic_metadata(chunks, topics_json)   # now topics_json exists
+
+    # 4. Embed and store in Chroma
     vectordb = Chroma.from_documents(
         documents=chunks,
-        embedding=embeddings,           # <--- changed from hardcoded OpenAIEmbeddings
+        embedding=embeddings,          # uses the global 'embeddings' (free/openai)
         persist_directory=str(CHROMA_DB_DIR)
     )
     vectordb.persist()
     print(f"Ingestion complete. {len(chunks)} chunks stored.")
     return vectordb
 
-
 def build_topics_json():
     """Create data/topics.json – {filename: [ {id, title, page}, ... ]}"""
-    import json
+    
     topics = {}
     for pdf_file in PDF_DIR.glob("*.pdf"):
         doc = fitz.open(pdf_file)

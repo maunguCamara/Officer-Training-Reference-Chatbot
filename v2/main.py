@@ -1,5 +1,7 @@
 import os
 import requests
+import json
+from pathlib import Path
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
@@ -56,6 +58,15 @@ print("Loading vector store...")
 vectorstore = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings)
 retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
+TOPICS_PATH = Path("data/topics.json")
+if TOPICS_PATH.exists():
+    with open(TOPICS_PATH, "r", encoding="utf-8") as f:
+        topics = json.load(f)
+else:
+    topics = {}
+    print("⚠️ topics.json not found – book/topic menus will be empty.")
+
+
 system_prompt = (
     "You are a legal training assistant. Your answers must be based ONLY on the provided context.\n"
     "If the context does not contain the answer, say 'Samahani, siwezi kupata jibu kutoka kwenye nyaraka zilizopo.' (Swahili) or "
@@ -75,6 +86,8 @@ prompt = ChatPromptTemplate.from_messages([
 question_answer_chain = create_stuff_documents_chain(llm, prompt)
 rag_chain = create_retrieval_chain(retriever, question_answer_chain)
 # This global will be reassigned on refresh
+
+
 def build_rag_chain(vstore):
     """Rebuild the rag_chain with a new vectorstore."""
     new_retriever = vstore.as_retriever(search_kwargs={"k": 4})
@@ -82,6 +95,33 @@ def build_rag_chain(vstore):
 
 def ask_question(query: str, user_language: str):
     return rag_chain.invoke({"input": query, "user_language": user_language})
+
+def ask_with_context(phone: str, query: str) -> str:
+    """
+    Retrieval‑augmented answer that respects the user’s selected book and topic.
+    Filters the vectorstore to only chunks from that book/topic.
+    """
+    user = user_data.get(phone, {})
+    book = user.get("selected_book")
+    topic_title = user.get("selected_topic", {}).get("title") if user.get("selected_topic") else None
+    lang = user.get("language", "en")
+
+    # Build filter dict for Chroma
+    filter_dict = {}
+    if book:
+        filter_dict["source"] = book             # filename metadata
+    if topic_title:
+        filter_dict["topic_title"] = topic_title  # assigned during ingestion
+
+    # Create a temporary retriever with the filter
+    filtered_retriever = vectorstore.as_retriever(
+        search_kwargs={"k": 4, "filter": filter_dict} if filter_dict else {"k": 4}
+    )
+
+    # Build a new chain on‑the‑fly (cheap, no network call)
+    chain = create_retrieval_chain(filtered_retriever, question_answer_chain)
+    result = chain.invoke({"input": query, "user_language": lang})
+    return result["answer"]
 
 print("Vector store and QA chain ready.")
 
@@ -212,6 +252,118 @@ def handle_message(phone: str, text: str, provider: str):
         disclaimer = get_localized("disclaimer", lang)
         send_message(phone, answer + disclaimer, provider)
         return
+
+LOCALIZED = {
+    "en": {
+        "choose_language": "Please choose your language:\n1. English\n2. Kiswahili\n3. Pukuti\n4. Français\n5. Deutsch",
+        "welcome_book_selection": "Great! Here are the available books:",
+        "topic_prompt": "Pick a topic:",
+        "disclaimer": "\n\n---\n*This is not legal advice...*",
+    },
+    "sw": {
+        "choose_language": "Tafadhali chagua lugha:\n1. English\n2. Kiswahili\n...",
+        "welcome_book_selection": "Sawa! Hapa kuna vitabu:",
+        "topic_prompt": "Chagua mada:",
+        "disclaimer": "\n\n---\n*Huu sio ushauri wa kisheria...*",
+    }
+}
+
+def get_localized(key: str, lang: str = "en") -> str:
+    """Simple translation lookup. Extend as needed."""
+    translations = {
+        "en": {
+            "choose_language": "Please choose your language:\n1. English\n2. Kiswahili",
+            "welcome_book_selection": "Great! Here are the available books:",
+            "book_prompt": "Reply with the number of the book you want to explore.",
+            "topic_prompt": "Choose a topic by number:",
+            "disclaimer": "\n\n---\n*This is not legal advice...*",
+            "invalid_choice": "Invalid choice. Please try again.",
+            "menu": "Type *menu* to see the topic list again.",
+            "no_books": "No books available yet."
+        },
+        "sw": {
+            "choose_language": "Tafadhali chagua lugha:\n1. English\n2. Kiswahili",
+            "welcome_book_selection": "Sawa! Haya ndiyo vitabu vinavyopatikana:",
+            "book_prompt": "Jibu kwa nambari ya kitabu unachotaka kukisoma.",
+            "topic_prompt": "Chagua mada kwa nambari:",
+            "disclaimer": "\n\n---\n*Huu sio ushauri wa kisheria...*",
+            "invalid_choice": "Chaguo si sahihi. Tafadhali jaribu tena.",
+            "menu": "Andika *menu* ili kuona orodha ya mada tena.",
+            "no_books": "Hakuna vitabu bado."
+        }
+    }
+    return translations.get(lang, translations["en"]).get(key, key)
+
+def show_book_list(phone: str, provider: str):
+    """Send a numbered list of available books (from topics.json keys)."""
+    books = list(topics.keys())
+    if not books:
+        send_message(phone, get_localized("no_books", user_data.get(phone, {}).get("language", "en")), provider)
+        return
+
+    lang = user_data.get(phone, {}).get("language", "en")
+    # Use the filename (without .pdf) as display name – could be overridden with a translation map
+    book_list_lines = [f"{i+1}. {Path(b).stem}" for i, b in enumerate(books)]
+    text = get_localized("welcome_book_selection", lang) + "\n" + "\n".join(book_list_lines) + "\n\n" + get_localized("book_prompt", lang)
+    send_message(phone, text, provider)
+
+def show_topic_list(phone: str, provider: str, book: str = None):
+    """Send a numbered list of topics for the given book (or the user's selected book)."""
+    if book is None:
+        book = user_data.get(phone, {}).get("selected_book")
+    if not book or book not in topics:
+        send_message(phone, get_localized("invalid_choice", user_data.get(phone, {}).get("language", "en")), provider)
+        return
+
+    lang = user_data.get(phone, {}).get("language", "en")
+    topic_list = topics[book]
+    if not topic_list:
+        send_message(phone, "This book has no chapters.", provider)
+        return
+
+    lines = [f"{t['id']}. {t['title']}" for t in topic_list]
+    text = get_localized("topic_prompt", lang) + "\n" + "\n".join(lines) + "\n\n" + get_localized("menu", lang)
+    send_message(phone, text, provider)
+
+def send_topic_summary(phone: str, provider: str, book: str, topic: dict):
+    """Fetch the first few paragraphs for a topic and generate a summary + suggested questions."""
+    lang = user_data.get(phone, {}).get("language", "en")
+    topic_title = topic["title"]
+
+    # Build a filtered retriever to get context for this topic
+    filter_dict = {"source": book, "topic_title": topic_title}
+    filtered_retriever = vectorstore.as_retriever(search_kwargs={"k": 3, "filter": filter_dict})
+    docs = filtered_retriever.invoke(topic_title)  # retrieve relevant chunks
+
+    # If no docs, fallback to a simple message
+    if not docs:
+        send_message(phone, f"📚 *{topic_title}*\n\n(No content found for this topic yet.)", provider)
+        return
+
+    # Build prompt for summary + suggested questions
+    context = "\n\n".join([d.page_content for d in docs])
+    prompt = (
+        f"Based on the following content from the book '{book}', topic '{topic_title}', "
+        f"provide a helpful summary in one paragraph (2-3 sentences) in {lang}. "
+        f"Then list 5 numbered questions a reader would likely ask about this topic, also in {lang}.\n\n"
+        f"Context:\n{context}\n\n"
+        f"Output format:\nSummary: ...\n\nQuestions:\n1. ...\n2. ..."
+    )
+
+    try:
+        # Use the LLM directly (no retriever needed, context already provided)
+        result = llm.invoke(prompt)
+        answer = result.content if hasattr(result, "content") else str(result)
+    except Exception as e:
+        print("Summary generation error:", e)
+        answer = f"📚 *{topic_title}*\n\n(A problem occurred while generating the summary.)"
+
+    # Add a footer with instructions
+    footer = get_localized("menu", lang)
+    full_text = answer + "\n\n" + footer
+    send_message(phone, full_text, provider)
+    return LOCALIZED.get(lang, LOCALIZED["en"]).get(key, key)
+
 def refresh_knowledge(phone, provider):
     from ingestion import update_vector_store
     try:
