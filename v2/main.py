@@ -218,7 +218,7 @@ def handle_message(phone: str, text: str, provider: str):
             user["state"] = "language_selection"
             show_language_selection(phone, provider)
         return
-        
+
     # State machine
     state = user.get("state", "language_selection")
 
@@ -399,6 +399,14 @@ def refresh_knowledge(phone, provider):
         print("Refresh error:", e)
         send_message(phone, "❌ Refresh failed.", provider)
 
+def show_language_selection(phone: str, provider: str):
+    """Send the language choice list and set state to language_selection."""
+    user_data.setdefault(phone, {})["state"] = "language_selection"
+    # You can store a default language or keep existing
+    lang = user_data[phone].get("language", "en")
+    text = get_localized("choose_language", lang)
+    send_message(phone, text, provider)
+    
 # ========== Webhook Endpoints ==========
 @app.get("/webhook")
 async def meta_verify(hub_mode=Query(alias="hub.mode"), hub_challenge=Query(alias="hub.challenge"),
