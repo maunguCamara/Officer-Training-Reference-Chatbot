@@ -197,6 +197,28 @@ def handle_message(phone: str, text: str, provider: str):
             show_book_list(phone, provider)
             return
 
+        # Universal back command
+    if text.strip() == "0":
+        current_state = user.get("state")
+        if current_state == "book_selection":
+            # go back to language selection
+            user["state"] = "language_selection"
+            user.pop("selected_book", None)
+            show_language_selection(phone, provider)   # implement this
+        elif current_state == "topic_selection":
+            user["state"] = "book_selection"
+            user.pop("selected_book", None)
+            show_book_list(phone, provider)
+        elif current_state == "chatting":
+            user["state"] = "topic_selection"
+            # stay on same book, show topic list again
+            show_topic_list(phone, provider, user.get("selected_book"))
+        else:
+            # fallback: restart from language
+            user["state"] = "language_selection"
+            show_language_selection(phone, provider)
+        return
+        
     # State machine
     state = user.get("state", "language_selection")
 
