@@ -1,5 +1,6 @@
 # ingestion.py
 import os
+import re
 import shutil
 from pathlib import Path
 from dotenv import load_dotenv
@@ -94,29 +95,52 @@ def update_vector_store(force_reload=False):
     print(f"Ingestion complete. {len(chunks)} chunks stored.")
     return vectordb
 
+def extract_headings_from_pdf(pdf_path):
+    """Fallback heading extraction using regex when no TOC exists."""
+    doc = fitz.open(pdf_path)
+    headings = []
+    seen_titles = set()
+    for page_num in range(len(doc)):
+        text = doc[page_num].get_text("text")
+        # match lines like "1. Short title and commencement."
+        matches = re.findall(r"^(\d+\.\s+[A-Za-z][^\n]{2,})", text, re.MULTILINE)
+        for match in matches:
+            title = match.strip()
+            if title not in seen_titles:
+                seen_titles.add(title)
+                headings.append((page_num + 1, title))
+    doc.close()
+    # sort by page (ascending), then by the leading number if present
+    headings.sort(key=lambda x: (x[0], int(re.match(r"(\d+)", x[1]).group(1)) if re.match(r"(\d+)", x[1]) else 0))
+    # assign ids sequentially, but keep original number for display (already in title)
+    chapter_list = [{"id": str(i+1), "title": title, "page": page} for i, (page, title) in enumerate(headings)]
+    return chapter_list
+
 def build_topics_json():
     """Create data/topics.json – {filename: [ {id, title, page}, ... ]}"""
-    
     topics = {}
     for pdf_file in PDF_DIR.glob("*.pdf"):
         doc = fitz.open(pdf_file)
-        toc = doc.get_toc()    # [[level, title, page], ...]
+        toc = doc.get_toc()
         doc.close()
-        if not toc:
-            # fallback: use file name as single "topic"
-            topics[pdf_file.name] = [{"id": "1", "title": pdf_file.stem, "page": 1}]
-            continue
-        # build flat list from TOC (only level 1 or 2 headings)
-        chapter_list = []
-        for i, (level, title, page) in enumerate(toc, start=1):
-            # keep only top-level headings; adjust as needed
-            if level <= 2:
-                chapter_list.append({"id": str(i), "title": title.strip(), "page": page})
-        topics[pdf_file.name] = chapter_list
+        if toc:
+            chapter_list = []
+            for i, (level, title, page) in enumerate(toc, start=1):
+                if level <= 2:
+                    chapter_list.append({"id": str(i), "title": title.strip(), "page": page})
+            topics[pdf_file.name] = chapter_list
+        else:
+            # Fallback: use regex heading extraction
+            chapter_list = extract_headings_from_pdf(pdf_file)
+            if chapter_list:
+                topics[pdf_file.name] = chapter_list
+            else:
+                # Absolute last resort
+                topics[pdf_file.name] = [{"id": "1", "title": pdf_file.stem, "page": 1}]
     with open(Path("data/topics.json"), "w", encoding="utf-8") as f:
         json.dump(topics, f, indent=2)
     print("Saved topics.json")
-
+    
 def assign_topic_metadata(docs, topics_json):
     for doc in docs:
         source = doc.metadata.get("source", "")

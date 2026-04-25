@@ -419,7 +419,7 @@ async def meta_verify(hub_mode=Query(alias="hub.mode"), hub_challenge=Query(alia
 async def meta_webhook(request: Request):
     body = await request.json()
     if body.get("object") != "whatsapp_business_account":
-        return PlainTextResponse("OK")
+        return PlainTextResponse("", status_cose=200)
     for entry in body.get("entry", []):
         for change in entry.get("changes", []):
             value = change.get("value", {})
@@ -441,7 +441,7 @@ async def meta_webhook(request: Request):
                 if msg_type == "text":
                     text = msg["text"]["body"].strip()
                     handle_message(from_number, text, provider="meta")
-    return PlainTextResponse("OK")
+    return PlainTextResponse("", status_code=200)
 
 @app.api_route("/webhook/twilio", methods=["GET", "POST"])
 async def twilio_webhook(request: Request):
@@ -453,6 +453,6 @@ async def twilio_webhook(request: Request):
     from_number = body.get("From", "").replace("whatsapp:", "")
     text = body.get("Body", "").strip()
     if not from_number:
-        return PlainTextResponse("OK")
+        return PlainTextResponse("", status_code=200)
     handle_message(from_number, text, provider="twilio")
-    return PlainTextResponse("OK")
+    return PlainTextResponse("", status_code=200)
