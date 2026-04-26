@@ -465,6 +465,100 @@ def show_language_selection(phone: str, provider: str):
     lang = user_data[phone].get("language", "en")
     text = get_localized("choose_language", lang)
     send_long_message(phone, text, provider)
+
+# ========== USSD Session ==========
+ussd_sessions = {}   # sessionId -> { "state": "main", "language": "en" }
+
+def ask_ussd(query: str, lang: str):
+    """Run global retrieval and return (short_answer, source_info)."""
+    # Use a global retriever (no filter) to get the most relevant chunks
+    global_retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+    docs = global_retriever.invoke(query)
+    if not docs:
+        return (get_localized("ussd_no_answer", lang), "")
+    context = "\n\n".join([d.page_content for d in docs])
+    # Minimal prompt for very short answer
+    prompt_text = (
+        f"Question: {query}\n"
+        f"Using the context below, answer in ONE sentence (max 20 words) in {lang}. "
+        f"Then include the source file and page.\n\nContext:\n{context}"
+    )
+    try:
+        result = llm.invoke(prompt_text)
+        answer = result.content if hasattr(result, "content") else str(result)
+    except Exception:
+        answer = get_localized("ussd_error", lang)
+    # Truncate answer to 130 chars to leave room for source line
+    if len(answer) > 130:
+        answer = answer[:127] + "..."
+    # Extract source metadata from first doc
+    source = docs[0].metadata.get("source", "document")
+    page = docs[0].metadata.get("page", "?")
+    source_line = f" ({source} p.{page})"
+    return answer, source_line
+
+def ussd_router(session_id: str, phone: str, text: str) -> str:
+    """Process a USSD request and return the response text (max 182 chars)."""
+    session = ussd_sessions.setdefault(session_id, {"state": "main", "language": "en"})
+    lang = session["language"]
+    user_input = text.strip() if text else ""
+
+    # Fresh session / first request
+    if not user_input:
+        # Show welcome message
+        welcome = get_localized("ussd_welcome", lang)  # e.g., "Welcome. Ask a question. Type LANG for language."
+        return welcome[:182]
+
+    # Language change
+    if user_input.upper() == "LANG":
+        session["state"] = "language_selection"
+        return get_localized("ussd_choose_lang", lang)[:182]
+
+    # Language selection state
+    if session.get("state") == "language_selection":
+        if user_input in ("1","2"):
+            lang_map = {"1":"en", "2":"sw"}
+            new_lang = lang_map.get(user_input, "en")
+            session["language"] = new_lang
+            session["state"] = "main"
+            return get_localized("ussd_lang_set", new_lang)[:182]
+        else:
+            return get_localized("ussd_invalid_lang", lang)[:182]
+
+    # Main state: treat input as a query
+    answer, source = ask_ussd(user_input, lang)
+    full = f"{answer}{source}"
+    # Ensure total length ≤ 182
+    if len(full) > 182:
+        # Try to trim the answer slightly
+        max_ans = 182 - len(source) - 1
+        if max_ans > 10:
+            full = answer[:max_ans] + source
+        else:
+            full = answer[:130]  # fallback without source?
+    return full[:182]
+
+def get_localized_ussd(key: str, lang: str) -> str:
+    """Short translations for USSD menus."""
+    translations = {
+        "en": {
+            "ussd_welcome": "Welcome to LegalBot. Ask a question, or type LANG for language.",
+            "ussd_choose_lang": "Choose language: 1. English 2. Kiswahili",
+            "ussd_lang_set": "Language set. Ask your question.",
+            "ussd_invalid_lang": "Invalid. Choose 1 or 2.",
+            "ussd_no_answer": "Sorry, no answer found.",
+            "ussd_error": "Sorry, an error occurred."
+        },
+        "sw": {
+            "ussd_welcome": "Karibu LegalBot. Uliza swali, au andika LANG kwa lugha.",
+            "ussd_choose_lang": "Chagua lugha: 1. English 2. Kiswahili",
+            "ussd_lang_set": "Lugha imewekwa. Uliza swali lako.",
+            "ussd_invalid_lang": "Batili. Chagua 1 au 2.",
+            "ussd_no_answer": "Samahani, hakuna jibu.",
+            "ussd_error": "Samahani, hitilafu imetokea."
+        }
+    }
+    return translations.get(lang, translations["en"]).get(key, key)
     
 # ========== Webhook Endpoints ==========
 @app.get("/webhook")
