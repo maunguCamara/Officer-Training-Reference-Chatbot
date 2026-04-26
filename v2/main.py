@@ -1,6 +1,7 @@
 import os
-import requests
 import json
+import requests
+import textwrap
 from pathlib import Path
 from fastapi import FastAPI, Request, Query
 from fastapi.responses import PlainTextResponse
@@ -263,7 +264,7 @@ def handle_message(phone: str, text: str, provider: str):
             user["selected_topic"] = topic
             user["state"] = "chatting"
             # show summary + suggested questions
-            send_topic_summary(phone, provider, book, topic)
+            send_long_message(phone, provider, book, topic)
         except (ValueError, IndexError):
             send_message(phone, get_localized("invalid_choice", lang), provider)
         return
@@ -272,8 +273,23 @@ def handle_message(phone: str, text: str, provider: str):
         # Free‑text RAG with book/topic filter
         answer = ask_with_context(phone, text)   # filter by book + topic
         disclaimer = get_localized("disclaimer", lang)
-        send_message(phone, answer + disclaimer, provider)
+        send_long_message(phone, answer + disclaimer, provider)
         return
+
+def send_long_message(phone: str, text: str, provider: str, max_chars: int = 500):
+    """Send text in chunks of max_chars, splitting exactly at character boundaries."""
+    # Remove leading/trailing whitespace
+    text = text.strip()
+    total_length = len(text)
+    parts = (total_length // max_chars) + (1 if total_length % max_chars else 0)
+
+    for i in range(0, total_length, max_chars):
+        chunk = text[i : i + max_chars].strip()
+        # Add a small continuation note if there’s more
+        if i + max_chars < total_length:
+            chunk += f"\n\n({i//max_chars + 1}/{parts})"
+        send_message(phone, chunk, provider)
+    print(f"Sending chunk of length {len(chunk)}")
 
 LOCALIZED = {
     "en": {
@@ -320,32 +336,32 @@ def show_book_list(phone: str, provider: str):
     """Send a numbered list of available books (from topics.json keys)."""
     books = list(topics.keys())
     if not books:
-        send_message(phone, get_localized("no_books", user_data.get(phone, {}).get("language", "en")), provider)
+        send_long_message(phone, text, provider)
         return
 
     lang = user_data.get(phone, {}).get("language", "en")
     # Use the filename (without .pdf) as display name – could be overridden with a translation map
     book_list_lines = [f"{i+1}. {Path(b).stem}" for i, b in enumerate(books)]
     text = get_localized("welcome_book_selection", lang) + "\n" + "\n".join(book_list_lines) + "\n\n" + get_localized("book_prompt", lang)
-    send_message(phone, text, provider)
+    send_long_message(phone, text, provider)
 
 def show_topic_list(phone: str, provider: str, book: str = None):
     """Send a numbered list of topics for the given book (or the user's selected book)."""
     if book is None:
         book = user_data.get(phone, {}).get("selected_book")
     if not book or book not in topics:
-        send_message(phone, get_localized("invalid_choice", user_data.get(phone, {}).get("language", "en")), provider)
+        send_long_message(phone, text, provider)
         return
 
     lang = user_data.get(phone, {}).get("language", "en")
     topic_list = topics[book]
     if not topic_list:
-        send_message(phone, "This book has no chapters.", provider)
+        send_long_message(phone, "This book has no chapters.", provider)
         return
 
     lines = [f"{t['id']}. {t['title']}" for t in topic_list]
     text = get_localized("topic_prompt", lang) + "\n" + "\n".join(lines) + "\n\n" + get_localized("menu", lang)
-    send_message(phone, text, provider)
+    send_long_message(phone, text, provider)
 
 def send_topic_summary(phone: str, provider: str, book: str, topic: dict):
     """Fetch the first few paragraphs for a topic and generate a summary + suggested questions."""
@@ -359,7 +375,7 @@ def send_topic_summary(phone: str, provider: str, book: str, topic: dict):
 
     # If no docs, fallback to a simple message
     if not docs:
-        send_message(phone, f"📚 *{topic_title}*\n\n(No content found for this topic yet.)", provider)
+        send_long_message(phone, f"📚 *{topic_title}*\n\n(No content found for this topic yet.)", provider)
         return
 
     # Build prompt for summary + suggested questions
@@ -383,7 +399,7 @@ def send_topic_summary(phone: str, provider: str, book: str, topic: dict):
     # Add a footer with instructions
     footer = get_localized("menu", lang)
     full_text = answer + "\n\n" + footer
-    send_message(phone, full_text, provider)
+    send_long_message(phone, full_text, provider) 
     return LOCALIZED.get(lang, LOCALIZED["en"]).get(key, key)
 
 def refresh_knowledge(phone, provider):
