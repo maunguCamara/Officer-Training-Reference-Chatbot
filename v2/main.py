@@ -188,6 +188,32 @@ def handle_message(phone: str, text: str, provider: str):
     user = user_data.setdefault(phone, {"language": "en", "state": "language_selection"})
     lang = user.get("language", "en")
 
+    #Answer question with general knowledge
+    def is_possible_question(text: str) -> bool:
+    """Heuristic: text that is not a simple menu number and is long enough, or ends with ?"""
+    t = text.strip()
+    if not t:
+        return False
+    # Single digits 0-9 usually menu choices
+    if t.isdigit() and len(t) <= 2:
+        return False
+    if t.endswith('?') or len(t.split()) >= 3:
+        return True
+    return False
+
+    # After language is known (state != language_selection), detect global questions
+    if user.get("language") != "unknown" and user.get("state") != "language_selection":
+        if is_possible_question(text) and text.lower() not in ("menu", "0"):
+            # Answer globally across all books
+            user["state"] = "chatting"
+            user.pop("selected_book", None)
+            user.pop("selected_topic", None)
+            answer = ask_with_context(phone, text)   # no filter → all books
+            disclaimer = get_localized("disclaimer", lang)
+            send_long_message(phone, answer + disclaimer, provider)
+            return
+
+
     # Global commands (work at any time)
     if text.strip().lower() == "menu":
         if user.get("selected_book"):
