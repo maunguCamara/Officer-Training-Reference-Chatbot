@@ -561,6 +561,16 @@ def get_localized_ussd(key: str, lang: str) -> str:
     return translations.get(lang, translations["en"]).get(key, key)
     
 # ========== Webhook Endpoints ==========
+@app.post("/ussd")
+async def ussd_endpoint(
+    sessionId: str = Form(...),
+    phoneNumber: str = Form(...),
+    text: str = Form(default="")
+):
+    # Trim extra spaces and handle empty text
+    response_text = ussd_router(sessionId, phoneNumber, text)
+    return PlainTextResponse(response_text)
+    
 @app.get("/webhook")
 async def meta_verify(hub_mode=Query(alias="hub.mode"), hub_challenge=Query(alias="hub.challenge"),
                       hub_verify_token=Query(alias="hub.verify_token")):
