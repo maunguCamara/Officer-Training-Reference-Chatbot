@@ -264,7 +264,7 @@ def handle_message(phone: str, text: str, provider: str):
             user["selected_topic"] = topic
             user["state"] = "chatting"
             # show summary + suggested questions
-            send_long_message(phone, provider, book, topic)
+            send_topic_summary(phone, provider, book, topic)
         except (ValueError, IndexError):
             send_message(phone, get_localized("invalid_choice", lang), provider)
         return
@@ -336,7 +336,7 @@ def show_book_list(phone: str, provider: str):
     """Send a numbered list of available books (from topics.json keys)."""
     books = list(topics.keys())
     if not books:
-        send_long_message(phone, text, provider)
+        send_long_message(phone, get_localized("no_books", lang), provider)
         return
 
     lang = user_data.get(phone, {}).get("language", "en")
@@ -350,7 +350,7 @@ def show_topic_list(phone: str, provider: str, book: str = None):
     if book is None:
         book = user_data.get(phone, {}).get("selected_book")
     if not book or book not in topics:
-        send_long_message(phone, text, provider)
+        send_long_message(phone, get_localized("invalid_choice", lang), provider)
         return
 
     lang = user_data.get(phone, {}).get("language", "en")
@@ -400,7 +400,7 @@ def send_topic_summary(phone: str, provider: str, book: str, topic: dict):
     footer = get_localized("menu", lang)
     full_text = answer + "\n\n" + footer
     send_long_message(phone, full_text, provider) 
-    return LOCALIZED.get(lang, LOCALIZED["en"]).get(key, key)
+   
 
 def refresh_knowledge(phone, provider):
     from ingestion import update_vector_store
@@ -421,7 +421,7 @@ def show_language_selection(phone: str, provider: str):
     # You can store a default language or keep existing
     lang = user_data[phone].get("language", "en")
     text = get_localized("choose_language", lang)
-    send_message(phone, text, provider)
+    send_long_message(phone, text, provider)
     
 # ========== Webhook Endpoints ==========
 @app.get("/webhook")
@@ -435,7 +435,7 @@ async def meta_verify(hub_mode=Query(alias="hub.mode"), hub_challenge=Query(alia
 async def meta_webhook(request: Request):
     body = await request.json()
     if body.get("object") != "whatsapp_business_account":
-        return PlainTextResponse("", status_cose=200)
+        return PlainTextResponse("", status_code=200)
     for entry in body.get("entry", []):
         for change in entry.get("changes", []):
             value = change.get("value", {})
