@@ -117,30 +117,32 @@ def extract_headings_from_pdf(pdf_path):
     return chapter_list
 
 def build_topics_json():
-    """Create data/topics.json – {filename: [ {id, title, page}, ... ]}"""
+    """Create data/topics.json using Part extraction for structured PDFs, fallback otherwise."""
     topics = {}
     for pdf_file in PDF_DIR.glob("*.pdf"):
         doc = fitz.open(pdf_file)
         toc = doc.get_toc()
         doc.close()
-        if toc:
+
+        # Try Part extraction first (for legal documents)
+        parts = extract_part_topics_from_pdf(pdf_file)
+        if parts:
+            topics[pdf_file.name] = parts
+        elif toc:
+            # Use TOC if available
             chapter_list = []
             for i, (level, title, page) in enumerate(toc, start=1):
                 if level <= 2:
                     chapter_list.append({"id": str(i), "title": title.strip(), "page": page})
             topics[pdf_file.name] = chapter_list
         else:
-            # Fallback: use regex heading extraction
-            chapter_list = extract_headings_from_pdf(pdf_file)
-            if chapter_list:
-                topics[pdf_file.name] = chapter_list
-            else:
-                # Absolute last resort
-                topics[pdf_file.name] = [{"id": "1", "title": pdf_file.stem, "page": 1}]
+            # Fallback: regex heading extraction (your existing code)
+            headings = extract_headings_from_pdf(pdf_file)
+            topics[pdf_file.name] = headings if headings else [{"id": "1", "title": pdf_file.stem, "page": 1}]
     with open(Path("data/topics.json"), "w", encoding="utf-8") as f:
         json.dump(topics, f, indent=2)
     print("Saved topics.json")
-    
+      
 def assign_topic_metadata(docs, topics_json):
     for doc in docs:
         source = doc.metadata.get("source", "")
