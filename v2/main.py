@@ -200,7 +200,7 @@ def add_footer(text: str, lang: str = "en") -> str:
     footer_sw = "\n\n---\n0: rudi | topics: vitabu hivi | books: vitabu vyote"
     footer = footer_sw if lang == "sw" else footer_en
     return text + footer
-    
+
 def handle_message(phone: str, text: str, provider: str):
     user = user_data.setdefault(phone, {"language": "en", "state": "language_selection"})
     #user.setdefault("language", "en")
@@ -334,14 +334,14 @@ def handle_message(phone: str, text: str, provider: str):
         # Free‑text RAG with book/topic filter
         answer = ask_with_context(phone, text)   # filter by book + topic
         disclaimer = get_localized("disclaimer", lang)
-        send_long_message(phone, answer + disclaimer, provider)
+        send_long_message(phone, answer + disclaimer, provider, lang=lang)
         return
-
-def send_long_message(phone: str, text: str, provider: str, max_chars: int = 500):
+def send_long_message(phone: str, text: str, provider: str, max_chars: int = 500,lang="en"):
     """Send text in chunks of max_chars, splitting exactly at character boundaries."""
     # Remove leading/trailing whitespace
-    text = text.strip()
-    total_length = len(text)
+    text_with_footer = add_footer(text, lang)
+    text_with_footer = text.strip()
+    total_length = len(text_with_footer)
     parts = (total_length // max_chars) + (1 if total_length % max_chars else 0)
 
     for i in range(0, total_length, max_chars):
@@ -349,7 +349,7 @@ def send_long_message(phone: str, text: str, provider: str, max_chars: int = 500
         # Add a small continuation note if there’s more
         if i + max_chars < total_length:
             chunk += f"\n\n({i//max_chars + 1}/{parts})"
-        send_message(phone, chunk, provider)
+        send_message(phone, chunk, provider, lang=lang)
     print(f"Sending chunk of length {len(chunk)}")
 
 LOCALIZED = {
@@ -399,27 +399,27 @@ def show_book_list(phone: str, provider: str):
     """Send a numbered list of available books (from topics.json keys)."""
     books = list(topics.keys())
     if not books:
-        send_long_message(phone, get_localized("no_books", lang), provider)
+        send_long_message(phone, get_localized("no_books", lang), provider, lang=lang)
         return
 
     lang = user_data.get(phone, {}).get("language", "en")
     # Use the filename (without .pdf) as display name – could be overridden with a translation map
     book_list_lines = [f"{i+1}. {Path(b).stem}" for i, b in enumerate(books)]
     text = get_localized("welcome_book_selection", lang) + "\n" + "\n".join(book_list_lines) + "\n\n" + get_localized("book_prompt", lang)
-    send_long_message(phone, text, provider)
+    send_long_message(phone, text, provider, lang=lang)
 
 def show_topic_list(phone: str, provider: str, book: str = None):
     """Send a numbered list of topics for the given book (or the user's selected book)."""
     if book is None:
         book = user_data.get(phone, {}).get("selected_book")
     if not book or book not in topics:
-        send_long_message(phone, get_localized("invalid_choice", lang), provider)
+        send_long_message(phone, get_localized("invalid_choice", lang), provider, lang=lang)
         return
 
     lang = user_data.get(phone, {}).get("language", "en")
     topic_list = topics[book]
     if not topic_list:
-        send_long_message(phone, "This book has no chapters.", provider)
+        send_long_message(phone, "This book has no chapters.", provider, lang=lang)
         return
 
     lines = [f"{t['id']}. {t['title']}" for t in topic_list]
@@ -453,7 +453,7 @@ def send_topic_summary(phone: str, provider: str, book: str, topic: dict):
             send_long_message(
                 phone,
                 f"📚 *{topic_title}*\n\n(No content found for this topic yet. Try asking a question directly.)",
-                provider
+                provider, lang=lang
             )
             return
 
@@ -476,7 +476,24 @@ def send_topic_summary(phone: str, provider: str, book: str, topic: dict):
 
     footer = get_localized("menu", lang)
     full_text = answer + "\n\n" + footer
-    send_long_message(phone, full_text, provider)  
+    send_long_message(phone, full_text, provider, lang=lang)  
+
+def send_full_part(phone: str, provider: str, book: str, topic_title: str, lang: str):
+    """Send all chunks of a given topic title, paginated."""
+    filter_where = {"$and": [
+        {"source": {"$eq": book}},
+        {"topic_title": {"$eq": topic_title.strip()}}
+    ]}
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 100, "filter": filter_where})
+    docs = retriever.invoke(topic_title)  # retrieves many chunks
+    if not docs:
+        send_long_message(phone, "(No content found.)", provider, lang=lang)
+        return
+
+    # Sort docs by page number
+    docs_sorted = sorted(docs, key=lambda d: d.metadata.get("page", 0))
+    content = "\n\n".join([f"Page {d.metadata.get('page', '?')}:\n{d.page_content}" for d in docs_sorted])
+    send_long_message(phone, content, provider, lang=lang, max_chars=1500)
 
 def refresh_knowledge(phone, provider):
     from ingestion import update_vector_store
@@ -497,7 +514,7 @@ def show_language_selection(phone: str, provider: str):
     # You can store a default language or keep existing
     lang = user_data[phone].get("language", "en")
     text = get_localized("choose_language", lang)
-    send_long_message(phone, text, provider)
+    send_long_message(phone, text, provider, lang=lang)
 
 # ========== USSD Session ==========
 ussd_sessions = {}   # sessionId -> { "state": "main", "language": "en" }
