@@ -156,3 +156,62 @@ def assign_topic_metadata(docs, topics_json):
             doc.metadata["topic_title"] = assigned_topic["title"]
             doc.metadata["topic_id"] = assigned_topic["id"]
     return docs
+
+def roman_to_int(s):
+    """Convert a Roman numeral string to an integer."""
+    s = s.upper()
+    rom_val = {'I':1, 'V':5, 'X':10, 'L':50, 'C':100, 'D':500, 'M':1000}
+    total = 0
+    prev = 0
+    for ch in reversed(s):
+        val = rom_val.get(ch, 0)
+        if val >= prev:
+            total += val
+            prev = val
+        else:
+            total -= val
+    return total
+
+def extract_part_topics_from_pdf(pdf_path):
+    """
+    Extract Part headings from the PDF.
+    Returns a list of dicts: [{"id": "1", "title": "Part I: PRELIMINARY", "page": 13}, ...]
+    """
+    doc = fitz.open(pdf_path)
+    part_entries = []
+    for page_num in range(len(doc)):
+        text = doc[page_num].get_text("text")
+        # Look for lines like "PART I—PRELIMINARY" or "PART II—SAFEGUARDS ..."
+        lines = text.split('\n')
+        for line in lines:
+            line = line.strip()
+            # Match pattern: "PART" followed by Roman numeral and then a dash/em-dash
+            m = re.match(r'PART\s+([IVXLCDM]+)\s*[—–-]\s*(.*)', line, re.IGNORECASE)
+            if m:
+                roman = m.group(1)
+                title = m.group(2).strip()
+                # Convert Roman numeral to integer for ordering
+                part_num = roman_to_int(roman)
+                # Clean title: remove any trailing section references
+                # (e.g., "PRELIMINARY 1—Short title.") -> just "PRELIMINARY"
+                # Take only the part before the first section number
+                clean_title = re.split(r'\s+\d+\s*[—–-]', title)[0].strip()
+                # Fallback: use original title if clean_title is empty
+                if not clean_title:
+                    clean_title = title.split('—')[0] if '—' in title else title
+                # Use the page number of the Part heading (1‑based)
+                page = page_num + 1
+                # Avoid duplicates (sometimes the same Part appears on multiple pages)
+                if not any(e['id'] == str(part_num) for e in part_entries):
+                    part_entries.append({
+                        "id": str(part_num),
+                        "title": f"Part {roman}: {clean_title}",
+                        "page": page
+                    })
+    doc.close()
+    # Sort by page number
+    part_entries.sort(key=lambda x: x["page"])
+    # Re‑assign IDs based on order
+    for i, entry in enumerate(part_entries, start=1):
+        entry["id"] = str(i)
+    return part_entries
