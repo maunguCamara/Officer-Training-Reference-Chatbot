@@ -241,6 +241,18 @@ def handle_message(phone: str, text: str, provider: str):
         else:
             show_book_list(phone, provider)
             return
+    
+    if text.strip().lower() == "topics":
+        if user.get("selected_book"):
+            show_topic_list(phone, provider, user["selected_book"])
+        else:
+            send_long_message(phone, get_localized("no_books", lang), provider, lang=lang)
+        return
+
+    if text.strip().lower() == "books":
+        user["state"] = "book_selection"
+        show_book_list(phone, provider)
+        return
 
         # Universal back command
     if text.strip() == "0":
@@ -263,6 +275,7 @@ def handle_message(phone: str, text: str, provider: str):
             user["state"] = "language_selection"
             show_language_selection(phone, provider)
         return
+    
 
     # State machine
     state = user.get("state", "language_selection")
@@ -331,11 +344,20 @@ def handle_message(phone: str, text: str, provider: str):
         return
 
     elif state == "chatting":
-        # Free‑text RAG with book/topic filter
-        answer = ask_with_context(phone, text)   # filter by book + topic
+        if text.strip().lower() == "more":
+        # Only if a topic is selected
+            if user.get("selected_topic") and user.get("selected_book"):
+                send_full_part(phone, provider, user["selected_book"], user["selected_topic"]["title"], lang)
+                return
+            else:
+                send_long_message(phone, "No topic selected. Use 'topics' first.", provider, lang=lang)
+                return
+            # normal QA
+        answer = ask_with_context(phone, text)
         disclaimer = get_localized("disclaimer", lang)
-        send_long_message(phone, answer + disclaimer, provider, lang=lang)
-        return
+        full_reply = answer + disclaimer
+        send_long_message(phone, full_reply, provider, lang=lang)
+    return
 def send_long_message(phone: str, text: str, provider: str, max_chars: int = 500,lang="en"):
     """Send text in chunks of max_chars, splitting exactly at character boundaries."""
     # Remove leading/trailing whitespace
