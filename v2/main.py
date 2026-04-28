@@ -3,7 +3,7 @@ import json
 import requests
 import textwrap
 from pathlib import Path
-from fastapi import FastAPI, Request, Query
+from fastapi import FastAPI, Request, Query, Form
 from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
 from twilio.rest import Client
@@ -43,6 +43,7 @@ else:
     embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
     print("✅ Using OpenAI LLM and embeddings.")
 
+
 # ========== Config ==========
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
@@ -53,8 +54,6 @@ twilio_client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_T
 twilio_number = os.getenv("TWILIO_WHATSAPP_NUMBER")
 
 # ========== LangChain Setup ==========
-
-
 print("Loading vector store...")
 vectorstore = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings)
 retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
@@ -107,22 +106,32 @@ def ask_with_context(phone: str, query: str) -> str:
     topic_title = user.get("selected_topic", {}).get("title") if user.get("selected_topic") else None
     lang = user.get("language", "en")
 
-    # Build filter dict for Chroma
-    filter_dict = {}
+    # Build a Chroma‑compatible where filter
+    conditions = []
     if book:
-        filter_dict["source"] = book             # filename metadata
+        conditions.append({"source": {"$eq": book}})
     if topic_title:
-        filter_dict["topic_title"] = topic_title  # assigned during ingestion
+        cleaned_topic = topic_title.strip()   # ensure no newlines
+        conditions.append({"topic_title": {"$eq": cleaned_topic}})
+
+    if len(conditions) == 1:
+        filter_where = conditions[0]
+    elif len(conditions) > 1:
+        filter_where = {"$and": conditions}
+    else:
+        filter_where = None
 
     # Create a temporary retriever with the filter
-    filtered_retriever = vectorstore.as_retriever(
-        search_kwargs={"k": 4, "filter": filter_dict} if filter_dict else {"k": 4}
-    )
+    search_kwargs = {"k": 4}
+    if filter_where:
+        search_kwargs["filter"] = filter_where
+    filtered_retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
 
     # Build a new chain on‑the‑fly (cheap, no network call)
     chain = create_retrieval_chain(filtered_retriever, question_answer_chain)
     result = chain.invoke({"input": query, "user_language": lang})
     return result["answer"]
+    
 
 print("Vector store and QA chain ready.")
 
@@ -178,6 +187,7 @@ def send_twilio_message(to: str, text: str):
         print("Twilio send error:", e)
 
 def send_message(to: str, text: str, provider: str):
+    print(f"send_message called, provider={provider}, to={to}, text={text[:50]}")
     if provider == "twilio":
         send_twilio_message(to, text)
     else:
@@ -186,6 +196,7 @@ def send_message(to: str, text: str, provider: str):
 # ========== Core Message Handler ==========
 def handle_message(phone: str, text: str, provider: str):
     user = user_data.setdefault(phone, {"language": "en", "state": "language_selection"})
+    #user.setdefault("language", "en")
     lang = user.get("language", "en")
 
     #Answer question with general knowledge
@@ -202,16 +213,16 @@ def handle_message(phone: str, text: str, provider: str):
         return False
 
     # After language is known (state != language_selection), detect global questions
-        if user.get("language") != "unknown" and user.get("state") != "language_selection":
-            if is_possible_question(text) and text.lower() not in ("menu", "0"):
-                # Answer globally across all books
-                user["state"] = "chatting"
-                user.pop("selected_book", None)
-                user.pop("selected_topic", None)
-                answer = ask_with_context(phone, text)   # no filter → all books
-                disclaimer = get_localized("disclaimer", lang)
-                send_long_message(phone, answer + disclaimer, provider)
-                return
+    if user.get("language") != "unknown" and user.get("state") != "language_selection":
+        if is_possible_question(text) and text.lower() not in ("menu", "0"):
+            # Answer globally across all books
+            user["state"] = "chatting"
+            user.pop("selected_book", None)
+            user.pop("selected_topic", None)
+            answer = ask_with_context(phone, text)   # no filter → all books
+            disclaimer = get_localized("disclaimer", lang)
+            send_long_message(phone, answer + disclaimer, provider)
+            return
 
 
     # Global commands (work at any time)
@@ -340,12 +351,14 @@ LOCALIZED = {
         "welcome_book_selection": "Great! Here are the available books:",
         "topic_prompt": "Pick a topic:",
         "disclaimer": "\n\n---\n*This is not legal advice...*",
+        "menu": "Type *menu* to see topics again, or *0* to go back.",
     },
     "sw": {
         "choose_language": "Tafadhali chagua lugha:\n1. English\n2. Kiswahili\n...",
         "welcome_book_selection": "Sawa! Hapa kuna vitabu:",
         "topic_prompt": "Chagua mada:",
         "disclaimer": "\n\n---\n*Huu sio ushauri wa kisheria...*",
+        "menu": "Andika *menu* ili kuona mada tena, au *0* kurudi nyuma.",
     }
 }
 
@@ -407,21 +420,37 @@ def show_topic_list(phone: str, provider: str, book: str = None):
     send_long_message(phone, text, provider)
 
 def send_topic_summary(phone: str, provider: str, book: str, topic: dict):
-    """Fetch the first few paragraphs for a topic and generate a summary + suggested questions."""
+    """Fetch content for a topic and generate a summary + suggested questions."""
     lang = user_data.get(phone, {}).get("language", "en")
-    topic_title = topic["title"]
+    topic_title = topic["title"].strip()
 
-    # Build a filtered retriever to get context for this topic
-    filter_dict = {"source": book, "topic_title": topic_title}
-    filtered_retriever = vectorstore.as_retriever(search_kwargs={"k": 3, "filter": filter_dict})
-    docs = filtered_retriever.invoke(topic_title)  # retrieve relevant chunks
+    # Build a Chroma‑compatible filter (like in ask_with_context)
+    conditions = [
+        {"source": {"$eq": book}},
+        {"topic_title": {"$eq": topic_title}}
+    ]
+    filter_where = {"$and": conditions}
 
-    # If no docs, fallback to a simple message
+    filtered_retriever = vectorstore.as_retriever(
+        search_kwargs={"k": 3, "filter": filter_where}
+    )
+    docs = filtered_retriever.invoke(topic_title)
+
     if not docs:
-        send_long_message(phone, f"📚 *{topic_title}*\n\n(No content found for this topic yet.)", provider)
-        return
+        # Fallback: try without the topic_title filter (some chunks might not have it)
+        fallback_retriever = vectorstore.as_retriever(
+            search_kwargs={"k": 3, "filter": {"source": {"$eq": book}}}
+        )
+        docs = fallback_retriever.invoke(topic_title)
+        if not docs:
+            send_long_message(
+                phone,
+                f"📚 *{topic_title}*\n\n(No content found for this topic yet. Try asking a question directly.)",
+                provider
+            )
+            return
 
-    # Build prompt for summary + suggested questions
+    # Build prompt for summary + questions
     context = "\n\n".join([d.page_content for d in docs])
     prompt = (
         f"Based on the following content from the book '{book}', topic '{topic_title}', "
@@ -432,18 +461,15 @@ def send_topic_summary(phone: str, provider: str, book: str, topic: dict):
     )
 
     try:
-        # Use the LLM directly (no retriever needed, context already provided)
         result = llm.invoke(prompt)
         answer = result.content if hasattr(result, "content") else str(result)
     except Exception as e:
         print("Summary generation error:", e)
         answer = f"📚 *{topic_title}*\n\n(A problem occurred while generating the summary.)"
 
-    # Add a footer with instructions
     footer = get_localized("menu", lang)
     full_text = answer + "\n\n" + footer
-    send_long_message(phone, full_text, provider) 
-   
+    send_long_message(phone, full_text, provider)  
 
 def refresh_knowledge(phone, provider):
     from ingestion import update_vector_store
@@ -570,7 +596,7 @@ async def ussd_endpoint(
     # Trim extra spaces and handle empty text
     response_text = ussd_router(sessionId, phoneNumber, text)
     return PlainTextResponse(response_text)
-    
+
 @app.get("/webhook")
 async def meta_verify(hub_mode=Query(alias="hub.mode"), hub_challenge=Query(alias="hub.challenge"),
                       hub_verify_token=Query(alias="hub.verify_token")):
@@ -613,9 +639,11 @@ async def twilio_webhook(request: Request):
     else:
         form = await request.form()
         body = dict(form)
+    print('Webhook called', body)
     from_number = body.get("From", "").replace("whatsapp:", "")
     text = body.get("Body", "").strip()
     if not from_number:
+        print("returning without handling")
         return PlainTextResponse("", status_code=200)
     handle_message(from_number, text, provider="twilio")
     return PlainTextResponse("", status_code=200)
