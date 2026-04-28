@@ -474,9 +474,12 @@ def send_topic_summary(phone: str, provider: str, book: str, topic: dict):
         print("Summary generation error:", e)
         answer = f"📚 *{topic_title}*\n\n(A problem occurred while generating the summary.)"
 
+    instruction = "Type *more* to read the full text of this Part.\n" if lang == "en" else "Andika *more* ili kusoma maandishi yote ya Sehemu hii.\n"
     footer = get_localized("menu", lang)
-    full_text = answer + "\n\n" + footer
-    send_long_message(phone, full_text, provider, lang=lang)  
+    full_text = answer + "\n\n" + instruction + footer
+    send_long_message(phone, full_text, provider, lang=lang)
+      
+     
 
 def send_full_part(phone: str, provider: str, book: str, topic_title: str, lang: str):
     """Send all chunks of a given topic title, paginated."""
