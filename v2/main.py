@@ -194,6 +194,13 @@ def send_message(to: str, text: str, provider: str):
         send_meta_message(to, text)
 
 # ========== Core Message Handler ==========
+def add_footer(text: str, lang: str = "en") -> str:
+    """Append navigation footer to a message."""
+    footer_en = "\n\n---\n0: back | topics: current book | books: all books"
+    footer_sw = "\n\n---\n0: rudi | topics: vitabu hivi | books: vitabu vyote"
+    footer = footer_sw if lang == "sw" else footer_en
+    return text + footer
+    
 def handle_message(phone: str, text: str, provider: str):
     user = user_data.setdefault(phone, {"language": "en", "state": "language_selection"})
     #user.setdefault("language", "en")
