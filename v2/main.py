@@ -228,7 +228,7 @@ def handle_message(phone: str, text: str, provider: str):
             user.pop("selected_topic", None)
             answer = ask_with_context(phone, text)   # no filter → all books
             disclaimer = get_localized("disclaimer", lang)
-            send_long_message(phone, answer + disclaimer, provider)
+            send_long_message(phone, answer + disclaimer, provider, lang=lang)
             return
 
 
@@ -312,9 +312,9 @@ def handle_message(phone: str, text: str, provider: str):
                 user.pop("selected_topic", None)
                 answer = ask_with_context(phone, num)
                 disclaimer = get_localized("disclaimer", lang)
-                send_long_message(phone, answer + disclaimer, provider)
+                send_long_message(phone, answer + disclaimer, provider, lang=lang)
             else:
-                send_long_message(phone, get_localized("invalid_choice", lang), provider)
+                send_long_message(phone, get_localized("invalid_choice", lang), provider, lang=lang)
         return
 
     elif state == "topic_selection":
@@ -338,9 +338,9 @@ def handle_message(phone: str, text: str, provider: str):
                 user.pop("selected_book", None)
                 answer = ask_with_context(phone, num)
                 disclaimer = get_localized("disclaimer", lang)
-                send_long_message(phone, answer + disclaimer, provider)
+                send_long_message(phone, answer + disclaimer, provider, lang=lang)
             else:
-                send_long_message(phone, get_localized("invalid_choice", lang), provider)
+                send_long_message(phone, get_localized("invalid_choice", lang), provider, lang=lang)
         return
 
     elif state == "chatting":
@@ -353,25 +353,24 @@ def handle_message(phone: str, text: str, provider: str):
                 send_long_message(phone, "No topic selected. Use 'topics' first.", provider, lang=lang)
                 return
             # normal QA
-        answer = ask_with_context(phone, text)
-        disclaimer = get_localized("disclaimer", lang)
-        full_reply = answer + disclaimer
-        send_long_message(phone, full_reply, provider, lang=lang)
-    return
+            answer = ask_with_context(phone, text)
+            disclaimer = get_localized("disclaimer", lang)
+            full_reply = answer + disclaimer
+            send_long_message(phone, full_reply, provider, lang=lang)
+            return
 def send_long_message(phone: str, text: str, provider: str, max_chars: int = 500,lang="en"):
     """Send text in chunks of max_chars, splitting exactly at character boundaries."""
     # Remove leading/trailing whitespace
-    text_with_footer = add_footer(text, lang)
-    text_with_footer = text.strip()
+    text_with_footer = add_footer(text.strip(), lang)
     total_length = len(text_with_footer)
     parts = (total_length // max_chars) + (1 if total_length % max_chars else 0)
 
     for i in range(0, total_length, max_chars):
-        chunk = text[i : i + max_chars].strip()
+        chunk = text_with_footer[i : i + max_chars].strip()
         # Add a small continuation note if there’s more
         if i + max_chars < total_length:
             chunk += f"\n\n({i//max_chars + 1}/{parts})"
-        send_message(phone, chunk, provider, lang=lang)
+        send_message(phone, chunk, provider)
     print(f"Sending chunk of length {len(chunk)}")
 
 LOCALIZED = {
@@ -419,6 +418,7 @@ def get_localized(key: str, lang: str = "en") -> str:
 
 def show_book_list(phone: str, provider: str):
     """Send a numbered list of available books (from topics.json keys)."""
+    lang = user_data.get(phone, {}).get("language", "en")
     books = list(topics.keys())
     if not books:
         send_long_message(phone, get_localized("no_books", lang), provider, lang=lang)
@@ -432,6 +432,7 @@ def show_book_list(phone: str, provider: str):
 
 def show_topic_list(phone: str, provider: str, book: str = None):
     """Send a numbered list of topics for the given book (or the user's selected book)."""
+    lang = user_data.get(phone, {}).get("language", "en")
     if book is None:
         book = user_data.get(phone, {}).get("selected_book")
     if not book or book not in topics:
@@ -446,7 +447,7 @@ def show_topic_list(phone: str, provider: str, book: str = None):
 
     lines = [f"{t['id']}. {t['title']}" for t in topic_list]
     text = get_localized("topic_prompt", lang) + "\n" + "\n".join(lines) + "\n\n" + get_localized("menu", lang)
-    send_long_message(phone, text, provider)
+    send_long_message(phone, text, provider, lang=lang)
 
 def send_topic_summary(phone: str, provider: str, book: str, topic: dict):
     """Fetch content for a topic and generate a summary + suggested questions."""
@@ -518,7 +519,7 @@ def send_full_part(phone: str, provider: str, book: str, topic_title: str, lang:
     # Sort docs by page number
     docs_sorted = sorted(docs, key=lambda d: d.metadata.get("page", 0))
     content = "\n\n".join([f"Page {d.metadata.get('page', '?')}:\n{d.page_content}" for d in docs_sorted])
-    send_long_message(phone, content, provider, lang=lang, max_chars=1500)
+    send_long_message(phone, content, provider, lang=lang, max_chars=1000)
 
 def refresh_knowledge(phone, provider):
     from ingestion import update_vector_store
