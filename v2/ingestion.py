@@ -142,23 +142,24 @@ def build_topics_json():
     with open(Path("data/topics.json"), "w", encoding="utf-8") as f:
         json.dump(topics, f, indent=2)
     print("Saved topics.json")
-      
+
 def assign_topic_metadata(docs, topics_json):
     for doc in docs:
         source = doc.metadata.get("source", "")
         book_topics = topics_json.get(source, [])
         page = doc.metadata.get("page", 1)
+        # Find the topic with the highest start page <= current page
         assigned_topic = None
-        # topics already sorted by page, but ensure
-        book_topics_sorted = sorted(book_topics, key=lambda x: x["page"])
+        # Sort topics by page ascending
+        book_topics_sorted = sorted(book_topics, key=lambda x: x.get("page", 1))
         for t in book_topics_sorted:
-            if page >= t["page"]:
+            start_page = t.get("page", 1)
+            if start_page <= page:
                 assigned_topic = t
         if assigned_topic:
-            doc.metadata["topic_title"] = assigned_topic["title"]
-            doc.metadata["topic_id"] = assigned_topic["id"]
+            doc.metadata["topic_title"] = assigned_topic["title"].strip()
+            doc.metadata["topic_id"] = assigned_topic.get("id", "0")
     return docs
-
 def roman_to_int(s):
     """Convert a Roman numeral string to an integer."""
     s = s.upper()
