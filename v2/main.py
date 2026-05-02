@@ -47,6 +47,7 @@ else:
 # ========== Config ==========
 ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN")
 PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 VERIFY_TOKEN = os.getenv("WEBHOOK_VERIFY_TOKEN", "my_custom_verify_token_123")
 CHROMA_DB_DIR = "data/chroma_db"
 
@@ -190,8 +191,24 @@ def send_message(to: str, text: str, provider: str):
     print(f"send_message called, provider={provider}, to={to}, text={text[:50]}")
     if provider == "twilio":
         send_twilio_message(to, text)
+    elif provider == "telegram":
+        send_telegram_message(to, text)
     else:
         send_meta_message(to, text)
+
+def send_telegram_message(chat_id: str, text: str):
+    """Send a text message to a Telegram chat."""
+    if not TELEGRAM_BOT_TOKEN:
+        print("❌ TELEGRAM_BOT_TOKEN not set, cannot send.")
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    try:
+        resp = requests.post(url, json=payload, timeout=5)
+        if resp.status_code != 200:
+            print("Telegram send error:", resp.json())
+    except Exception as e:
+        print("Telegram send exception:", e)
 
 # ========== Core Message Handler ==========
 def add_footer(text: str, lang: str = "en") -> str:
@@ -637,6 +654,27 @@ def get_localized_ussd(key: str, lang: str) -> str:
     return translations.get(lang, translations["en"]).get(key, key)
     
 # ========== Webhook Endpoints ==========
+@app.api_route("/webhook/telegram", methods=["GET", "POST"])
+async def telegram_webhook(request: Request):
+    """Handle incoming Telegram messages (both GET and POST for flexibility)."""
+    if request.method == "GET":
+        return PlainTextResponse("Telegram webhook is active", status_code=200)
+    try:
+        body = await request.json()
+    except Exception:
+        return PlainTextResponse("", status_code=200)
+    # print("Telegram update:", body)  # debug if needed
+    if "message" not in body:
+        return PlainTextResponse("", status_code=200)
+    msg = body["message"]
+    chat_id = str(msg["chat"]["id"])
+    text = msg.get("text", "")
+    if not text:
+        return PlainTextResponse("", status_code=200)
+    # Use the same handler – chat_id acts as the user's phone number
+    handle_message(chat_id, text, provider="telegram")
+    return PlainTextResponse("", status_code=200)
+
 @app.post("/ussd")
 async def ussd_endpoint(
     sessionId: str = Form(...),
