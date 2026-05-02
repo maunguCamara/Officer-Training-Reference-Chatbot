@@ -1,4 +1,5 @@
 import os
+import time
 import json
 import requests
 import textwrap
@@ -209,6 +210,32 @@ def send_telegram_message(chat_id: str, text: str):
             print("Telegram send error:", resp.json())
     except Exception as e:
         print("Telegram send exception:", e)
+
+def telegram_polling():
+    print("Polling started")
+    offset = 0
+    while True:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates?offset={offset}&timeout=60"
+        try:
+            resp = requests.get(url, timeout=65)
+            data = resp.json()
+            if data["ok"] and data["result"]:
+                for upd in data["result"]:
+                    offset = upd["update_id"] + 1
+                    msg = upd.get("message")
+                    if msg and "text" in msg:
+                        chat_id = str(msg["chat"]["id"])
+                        text = msg["text"]
+                        handle_message(chat_id, text, provider="telegram")
+        except Exception as e:
+            print("Polling error:", e)
+        time.sleep(1)
+
+# Start it in a thread after the app starts
+@app.on_event("startup")
+def start_polling():
+    if TELEGRAM_BOT_TOKEN:
+        threading.Thread(target=telegram_polling, daemon=True).start()
 
 # ========== Core Message Handler ==========
 def add_footer(text: str, lang: str = "en") -> str:
