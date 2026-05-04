@@ -224,6 +224,6 @@ def update_vector_store(force_reload=False):
         embedding=embeddings,
         persist_directory=str(CHROMA_DB_DIR)
     )
-    vectordb.persist()
+    
     print(f"Ingestion complete. {len(chunks)} chunks stored.")
     return vectordb

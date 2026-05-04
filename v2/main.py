@@ -69,6 +69,7 @@ CHROMA_DB_DIR = "data/chroma_db"
 twilio_client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
 twilio_number = os.getenv("TWILIO_WHATSAPP_NUMBER")
 
+pending_feedback = {}
 # ========== LangChain Setup ==========
 print("Loading vector store...")
 vectorstore = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings)
@@ -334,13 +335,18 @@ def handle_message(phone: str, text: str, provider: str):
             rating = 0
         else:
             send_message(phone, get_localized("feedback_invalid", lang), provider)
-            return
-        last_query = user.get("last_query", "")
-        last_answer = user.get("last_answer", "")
-        database.save_feedback(phone, last_query, last_answer, rating)
-        send_message(phone, get_localized("feedback_thanks", lang), provider)
         return
-
+    fb = pending_feedback.get(phone, {})
+    last_q = fb.get("last_query", "")
+    last_a = fb.get("last_answer", "")
+    if not last_q or not last_a:
+        send_message(phone, "No recent question to rate. Ask something first.", provider)
+        return
+    database.save_feedback(phone, last_q, last_a, rating)
+    # Clear after saving
+    pending_feedback.pop(phone, None)
+    send_message(phone, get_localized("feedback_thanks", lang), provider)
+    return
     # Search across all books
     if text.strip().lower().startswith("/search"):
         query = text[len("/search"):].strip()
@@ -418,7 +424,7 @@ def handle_message(phone: str, text: str, provider: str):
             disclaimer = get_localized("disclaimer", lang)
             full_reply = answer + disclaimer + "\n\n" + get_localized("feedback_prompt", lang)
             # Store for feedback
-            database.set_user(phone, last_query=text, last_answer=answer)
+            #database.set_user(phone, last_query=text, last_answer=answer)
             send_long_message(phone, full_reply, provider, lang=lang)
             return
 
@@ -450,7 +456,7 @@ def handle_message(phone: str, text: str, provider: str):
                 answer = ask_with_context(phone, num)
                 disclaimer = get_localized("disclaimer", lang)
                 full_reply = answer + disclaimer + "\n\n" + get_localized("feedback_prompt", lang)
-                database.set_user(phone, last_query=num, last_answer=answer)
+                #database.set_user(phone, last_query=num, last_answer=answer)
                 send_long_message(phone, full_reply, provider, lang=lang)
             else:
                 send_long_message(phone, get_localized("invalid_choice", lang), provider, lang=lang)
@@ -476,7 +482,7 @@ def handle_message(phone: str, text: str, provider: str):
                 answer = ask_with_context(phone, num)
                 disclaimer = get_localized("disclaimer", lang)
                 full_reply = answer + disclaimer + "\n\n" + get_localized("feedback_prompt", lang)
-                database.set_user(phone, last_query=num, last_answer=answer)
+                #database.set_user(phone, last_query=num, last_answer=answer)
                 send_long_message(phone, full_reply, provider, lang=lang)
             else:
                 send_long_message(phone, get_localized("invalid_choice", lang), provider, lang=lang)
@@ -496,9 +502,10 @@ def handle_message(phone: str, text: str, provider: str):
 
         # Normal QA
         answer = ask_with_context(phone, text)
+        pending_feedback[phone] = {"last_query": text, "last_answer": answer}
         disclaimer = get_localized("disclaimer", lang)
         full_reply = answer + disclaimer + "\n\n" + get_localized("feedback_prompt", lang)
-        database.set_user(phone, last_query=text, last_answer=answer)
+        #database.set_user(phone, last_query=text, last_answer=answer)
         database.save_analytics("question", phone)
         send_long_message(phone, full_reply, provider, lang=lang)
         return

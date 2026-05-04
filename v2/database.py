@@ -20,7 +20,9 @@ def init_db():
                         language TEXT DEFAULT 'en',
                         state TEXT DEFAULT 'language_selection',
                         selected_book TEXT,
-                        selected_topic TEXT
+                        selected_topic TEXT,
+                        last_query TEXT,
+                        last_answer TEXT
                      )''')
         c.execute('''CREATE TABLE IF NOT EXISTS feedback (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,11 +51,19 @@ def get_user(user_id):
 
 def set_user(user_id, **kwargs):
     conn = get_conn()
-    # Build update string from kwargs
-    fields = ', '.join(f"{k} = ?" for k in kwargs)
-    values = list(kwargs.values()) + [user_id]
-    conn.execute(f"INSERT INTO user_state (user_id, {', '.join(kwargs.keys())}) VALUES (?, {', '.join('?' for _ in kwargs)}) "
-                 f"ON CONFLICT(user_id) DO UPDATE SET {fields}", values + [user_id])
+    # Build insert/update columns and values
+    columns = ', '.join(kwargs.keys())
+    placeholders = ', '.join('?' for _ in kwargs)
+    updates = ', '.join(f"{k} = ?" for k in kwargs)
+    values = list(kwargs.values())
+    conn.execute(f"""INSERT INTO user_state (user_id, {columns}) VALUES (?, {placeholders})
+                     ON CONFLICT(user_id) DO UPDATE SET {updates}""",
+                 [user_id] + values + values)
+    conn.commit()
+
+def delete_user(user_id):
+    conn = get_conn()
+    conn.execute("DELETE FROM user_state WHERE user_id = ?", (user_id,))
     conn.commit()
 
 def save_feedback(user_id, query, answer, rating):
@@ -72,7 +82,9 @@ def get_stats():
     conn = get_conn()
     total_users = conn.execute("SELECT COUNT(DISTINCT user_id) FROM user_state").fetchone()[0]
     total_queries = conn.execute("SELECT COUNT(*) FROM analytics WHERE event_type='question'").fetchone()[0]
-    top_books = conn.execute("SELECT book, COUNT(*) as cnt FROM analytics WHERE event_type='book_selected' GROUP BY book ORDER BY cnt DESC LIMIT 5").fetchall()
+    top_books = conn.execute(
+        "SELECT book, COUNT(*) as cnt FROM analytics WHERE event_type='book_selected' GROUP BY book ORDER BY cnt DESC LIMIT 5"
+    ).fetchall()
     return {
         "total_users": total_users,
         "total_queries": total_queries,
