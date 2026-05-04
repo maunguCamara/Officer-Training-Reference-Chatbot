@@ -420,7 +420,7 @@ def send_long_message(phone: str, text: str, provider: str, max_chars: int = 500
 LOCALIZED = {
     "en": {
         "choose_language": "Please choose your language:\n1. English\n2. Kiswahili\n3. Pukuti\n4. Français\n5. Deutsch",
-        "welcome_book_selection": "Great! Here are the available books:",
+        "welcome_book_selection": "Here are the available books:",
         "topic_prompt": "Pick a topic:",
         "disclaimer": "\n\n---\n*This is not legal advice...*",
         "menu": "Type *menu* to see topics again, or *0* to go back.",
