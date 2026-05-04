@@ -578,6 +578,43 @@ def send_long_message(phone: str, text: str, provider: str, max_chars=500, lang=
             chunk += f"\n\n({i//max_chars + 1}/{parts})"
         send_message(phone, chunk, provider)
 
+def ussd_router(session_id: str, phone: str, text: str) -> str:
+    """Process a USSD request and return the response text (max 182 chars)."""
+    session = ussd_sessions.setdefault(session_id, {"state": "main", "language": "en"})
+    lang = session["language"]
+    user_input = text.strip() if text else ""
+
+    # Helper to prepend CON or END
+    def respond(prefix, msg):
+        return f"{prefix} {msg}"[:182]
+
+    # Fresh session
+    if not user_input:
+        return respond("CON", get_localized_ussd("ussd_welcome", lang))
+
+    # Language change
+    if user_input.upper() == "LANG":
+        session["state"] = "language_selection"
+        return respond("CON", get_localized_ussd("ussd_choose_lang", lang))
+
+    if session.get("state") == "language_selection":
+        if user_input in ("1", "2"):
+            lang_map = {"1": "en", "2": "sw"}
+            new_lang = lang_map.get(user_input, "en")
+            session["language"] = new_lang
+            session["state"] = "main"
+            return respond("END", get_localized_ussd("ussd_lang_set", new_lang))
+        else:
+            return respond("CON", get_localized_ussd("ussd_invalid_lang", lang))
+
+    # Main state – answer query
+    answer, source = ask_ussd(user_input, lang)
+    full = f"{answer}{source}"
+    # Ensure total length ≤ 160 to leave room for "END "
+    if len(full) > 155:
+        full = full[:152] + "..."
+    return respond("END", full)
+
 # --- Book/Topic/Summary functions (same as before, but use database) ---
 def show_book_list(phone: str, provider: str):
     user = database.get_user(phone) or {}
