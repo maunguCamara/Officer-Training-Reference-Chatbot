@@ -12,6 +12,8 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
+from docx import Document as DocxDocument
+from bs4 import BeautifulSoup
 
 DetectorFactory.seed = 0
 
@@ -33,21 +35,28 @@ else:
     embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
 
 
-def extract_text_from_pdfs(pdf_dir=PDF_DIR):
+def extract_documents(doc_dir):
     all_docs = []
-    for pdf_file in pdf_dir.glob("*.pdf"):
-        doc = fitz.open(pdf_file)
-        for page_num in range(len(doc)):
-            text = doc[page_num].get_text("text").strip()
-            if not text:
-                continue
-            text = " ".join(text.split())
-            metadata = {
-                "source": pdf_file.name,
-                "page": page_num + 1
-            }
-            all_docs.append(Document(page_content=text, metadata=metadata))
-        doc.close()
+    for file_path in doc_dir.iterdir():
+        if file_path.suffix == '.pdf':
+            # ... existing PDF code ...
+        elif file_path.suffix == '.docx':
+            doc = DocxDocument(file_path)
+            for para in doc.paragraphs:
+                text = para.text.strip()
+                if text:
+                    all_docs.append(Document(page_content=text, metadata={"source": file_path.name, "page": 1}))
+        elif file_path.suffix == '.txt':
+            with open(file_path, 'r', encoding='utf-8') as f:
+                text = f.read()
+            chunks = split_documents([Document(page_content=text, metadata={"source": file_path.name, "page": 1})])
+            all_docs.extend(chunks)
+        elif file_path.suffix == '.html':
+            with open(file_path, 'r', encoding='utf-8') as f:
+                soup = BeautifulSoup(f.read(), 'html.parser')
+            text = soup.get_text()
+            docs = [Document(page_content=text, metadata={"source": file_path.name, "page": 1})]
+            all_docs.extend(split_documents(docs))
     return all_docs
 
 def split_documents(docs, chunk_size=500, chunk_overlap=50):
