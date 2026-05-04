@@ -125,6 +125,14 @@ def extract_headings_from_pdf(pdf_path):
     chapter_list = [{"id": str(i+1), "title": title, "page": page} for i, (page, title) in enumerate(headings)]
     return chapter_list
 
+def extract_headings_from_docx(file_path):
+    doc = DocxDocument(file_path)
+    headings = []
+    for para in doc.paragraphs:
+        if para.style.name.startswith('Heading'):
+            headings.append({"title": para.text.strip(), "page": 1})
+    return headings
+
 def build_topics_json():
     """Create data/topics.json using Part extraction for structured PDFs, fallback otherwise."""
     topics = {}
