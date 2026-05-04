@@ -19,6 +19,10 @@ from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
+from chromadb.api.types import EmbeddingFunction
+from chromadb.config import Settings
+
+
 
 import threading
 from cachetools import TTLCache
@@ -110,6 +114,8 @@ def build_rag_chain(vstore):
 answer_cache = TTLCache(maxsize=200, ttl=600)  # 200 items, 10 minutes
 
 def ask_with_context(phone: str, query: str) -> str:
+    if ingestion_in_progress:
+        return "🛠️ The knowledge base is being rebuilt. Please wait a few minutes and try again."
     user = database.get_user(phone)
     if not user:
         return "User not found. Please restart with /start."
@@ -312,6 +318,52 @@ def get_localized(key: str, lang: str = "en") -> str:
     }
     return translations.get(lang, translations["en"]).get(key, key)
 
+def init_vectorstore(force_rebuild=False):
+    global vectorstore, retriever, rag_chain, ingestion_in_progress
+    ingestion_in_progress = False
+
+    print("Loading vector store...")
+    try:
+        vectorstore = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings)
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+        rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+        print("✅ Vector store ready.")
+    except Exception as e:
+        print(f"⚠️ Vector store error: {e}")
+        print("🗑️  Deleting corrupted database and rebuilding...")
+        # Wipe both Chroma's internal cache and our local folder
+        shutil.rmtree(CHROMA_DB_DIR, ignore_errors=True)
+        shutil.rmtree(Path.home() / ".chromadb", ignore_errors=True)
+
+        # Create an empty but valid Chroma store
+        dummy_text = ["placeholder"]
+        vectorstore = Chroma.from_texts(dummy_text, embedding=embeddings, persist_directory=CHROMA_DB_DIR)
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+        rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+
+        # Start background re‑ingestion of the real PDFs
+        ingestion_in_progress = True
+        threading.Thread(target=_background_ingest, daemon=True).start()
+
+def _background_ingest():
+    global vectorstore, retriever, rag_chain, ingestion_in_progress
+    try:
+        from ingestion import update_vector_store
+        update_vector_store(force_reload=True)
+        # Reload the fresh store
+        vectorstore = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings)
+        retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+        rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+        print("✅ Background ingestion complete.")
+    except Exception as e:
+        print(f"❌ Background ingestion failed: {e}")
+    finally:
+        ingestion_in_progress = False
+
+# Flag to check while ingestion is in progress
+ingestion_in_progress = False
+init_vectorstore(force_rebuild=False)
+
 # ========== Core Message Handler ==========
 def handle_message(phone: str, text: str, provider: str):
     user = database.get_user(phone)
@@ -321,7 +373,13 @@ def handle_message(phone: str, text: str, provider: str):
     lang = user.get("language", "en")
 
     # --- Global commands (before state machine) ---
-
+    # --- Reset commands (always go to language selection) ---
+    if text.strip().lower() in ("/start", "hello", "hi", "habari", "mambo"):
+        database.set_user(phone, language="en", state="language_selection", selected_book=None, selected_topic=None)
+        user = database.get_user(phone) or {}
+        lang = user.get("language", "en")
+        show_language_selection(phone, provider)
+        return
     # Feedback
     if text.startswith("/feedback"):
         parts = text.split()
@@ -335,18 +393,18 @@ def handle_message(phone: str, text: str, provider: str):
             rating = 0
         else:
             send_message(phone, get_localized("feedback_invalid", lang), provider)
+            return
+        fb = pending_feedback.get(phone, {})
+        last_q = fb.get("last_query", "")
+        last_a = fb.get("last_answer", "")
+        if not last_q or not last_a:
+            send_message(phone, "No recent question to rate. Ask something first.", provider)
+            return
+        database.save_feedback(phone, last_q, last_a, rating)
+        # Clear after saving
+        pending_feedback.pop(phone, None)
+        send_message(phone, get_localized("feedback_thanks", lang), provider)
         return
-    fb = pending_feedback.get(phone, {})
-    last_q = fb.get("last_query", "")
-    last_a = fb.get("last_answer", "")
-    if not last_q or not last_a:
-        send_message(phone, "No recent question to rate. Ask something first.", provider)
-        return
-    database.save_feedback(phone, last_q, last_a, rating)
-    # Clear after saving
-    pending_feedback.pop(phone, None)
-    send_message(phone, get_localized("feedback_thanks", lang), provider)
-    return
     # Search across all books
     if text.strip().lower().startswith("/search"):
         query = text[len("/search"):].strip()
