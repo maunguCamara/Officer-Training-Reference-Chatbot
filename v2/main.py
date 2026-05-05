@@ -701,10 +701,10 @@ def refresh_knowledge(phone, provider):
         global vectorstore, rag_chain
         vectorstore = Chroma(persist_directory=CHROMA_DB_DIR, embedding_function=embeddings)
         rag_chain = build_rag_chain(vectorstore)
-        send_message(phone, "✅ Knowledge base refreshed.", provider)
+        send_message(phone, "Knowledge base refreshed.", provider)
     except Exception as e:
         print("Refresh error:", e)
-        send_message(phone, "❌ Refresh failed.", provider)
+        send_message(phone, "Refresh failed.", provider)
 
 def show_language_selection(phone: str, provider: str):
     database.set_user(phone, state="language_selection")
