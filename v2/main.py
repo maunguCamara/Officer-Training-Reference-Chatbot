@@ -578,6 +578,35 @@ def send_long_message(phone: str, text: str, provider: str, max_chars=500, lang=
             chunk += f"\n\n({i//max_chars + 1}/{parts})"
         send_message(phone, chunk, provider)
 
+
+def ask_ussd(query: str, lang: str):
+    """Run global retrieval and return (short_answer, source_info)."""
+    # Use a global retriever (no filter) to get the most relevant chunks
+    global_retriever = vectorstore.as_retriever(search_kwargs={"k": 2})
+    docs = global_retriever.invoke(query)
+    if not docs:
+        return (get_localized("ussd_no_answer", lang), "")
+    context = "\n\n".join([d.page_content for d in docs])
+    # Minimal prompt for very short answer
+    prompt_text = (
+        f"Question: {query}\n"
+        f"Using the context below, answer in ONE sentence (max 20 words) in {lang}. "
+        f"Then include the source file and page.\n\nContext:\n{context}"
+    )
+    try:
+        result = llm.invoke(prompt_text)
+        answer = result.content if hasattr(result, "content") else str(result)
+    except Exception:
+        answer = get_localized("ussd_error", lang)
+    # Truncate answer to 130 chars to leave room for source line
+    if len(answer) > 130:
+        answer = answer[:127] + "..."
+    # Extract source metadata from first doc
+    source = docs[0].metadata.get("source", "document")
+    page = docs[0].metadata.get("page", "?")
+    source_line = f" ({source} p.{page})"
+    return answer, source_line
+
 def ussd_router(session_id: str, phone: str, text: str) -> str:
     """Process a USSD request and return the response text (max 182 chars)."""
     session = ussd_sessions.setdefault(session_id, {"state": "main", "language": "en"})
@@ -590,12 +619,12 @@ def ussd_router(session_id: str, phone: str, text: str) -> str:
 
     # Fresh session
     if not user_input:
-        return respond("CON", get_localized_ussd("ussd_welcome", lang))
+        return respond("CON", get_localized("ussd_welcome", lang))
 
     # Language change
     if user_input.upper() == "LANG":
         session["state"] = "language_selection"
-        return respond("CON", get_localized_ussd("ussd_choose_lang", lang))
+        return respond("CON", get_localized("ussd_choose_lang", lang))
 
     if session.get("state") == "language_selection":
         if user_input in ("1", "2"):
@@ -603,9 +632,9 @@ def ussd_router(session_id: str, phone: str, text: str) -> str:
             new_lang = lang_map.get(user_input, "en")
             session["language"] = new_lang
             session["state"] = "main"
-            return respond("END", get_localized_ussd("ussd_lang_set", new_lang))
+            return respond("END", get_localized("ussd_lang_set", new_lang))
         else:
-            return respond("CON", get_localized_ussd("ussd_invalid_lang", lang))
+            return respond("CON", get_localized("ussd_invalid_lang", lang))
 
     # Main state – answer query
     answer, source = ask_ussd(user_input, lang)
