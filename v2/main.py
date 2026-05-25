@@ -299,6 +299,12 @@ def get_localized(key: str, lang: str = "en") -> str:
             "feedback_thanks": "Thank you for your feedback!",
             "search_prompt": "Usage: /search your question",
             "search_no_results": "No matching content found.",
+            "ussd_welcome": "Welcome to the legal training service! Please choose your language:\n1. English\n2. Kiswahili",
+            "ussd_choose_lang": "Please choose your language:\n1. English\n2. Kiswahili",
+            "ussd_lang_set": "Language set successfully!",
+            "ussd_invalid_lang": "Invalid language choice. Please choose again.",
+            "ussd_no_answer": "No answer available.",
+            "ussd_error": "An error occurred while processing your request."
         },
         "sw": {
             "choose_language": "Tafadhali chagua lugha:\n1. English\n2. Kiswahili",
@@ -314,6 +320,12 @@ def get_localized(key: str, lang: str = "en") -> str:
             "feedback_thanks": "Asante kwa maoni yako!",
             "search_prompt": "Matumizi: /search swali lako",
             "search_no_results": "Hakuna maudhui yanayolingana.",
+            "ussd_welcome": "Karibu kwenye huduma ya mafunzo ya sheria! Tafadhali chagua lugha:\n1. English\n2. Kiswahili",
+            "ussd_choose_lang": "Tafadhali chagua lugha:\n1. English\n2. Kiswahili",
+            "ussd_lang_set": "Lugha imewekwa kwa ufanisi!",
+            "ussd_invalid_lang": "Lugha si sahihi. Tafadhali chagua tena.",
+            "ussd_no_answer": "Hakuna jibu linalopatikana.",
+            "ussd_error": "Kosa limetokea wakati wa kufanya utafutaji."
         }
     }
     return translations.get(lang, translations["en"]).get(key, key)
@@ -568,6 +580,54 @@ def handle_message(phone: str, text: str, provider: str):
         send_long_message(phone, full_reply, provider, lang=lang)
         return
 
+def ussd_send_topic_summary(book: str, topic: dict, lang: str) -> str:
+    """Return a USSD‑safe summary of a topic (≤150 chars)."""
+    topic_title = topic["title"].strip()
+    conditions = [
+        {"source": {"$eq": book}},
+        {"topic_title": {"$eq": topic_title}}
+    ]
+    filter_where = {"$and": conditions}
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 2, "filter": filter_where})
+    docs = retriever.invoke(topic_title)
+    if not docs:
+        return f"📚 {topic_title}\n(No content)."
+
+    context = " ".join([d.page_content[:200] for d in docs])
+    prompt = (
+        f"Summarise the following in 1 short sentence in {lang} (max 120 chars).\n"
+        f"Topic: {topic_title}\nContext: {context}"
+    )
+    try:
+        result = llm.invoke(prompt)
+        answer = result.content if hasattr(result, "content") else str(result)
+    except Exception:
+        answer = topic_title
+    return answer[:150] + "..."
+
+def ussd_show_book_list(lang: str) -> str:
+    """Short book list for USSD."""
+    books = list(topics.keys())
+    if not books:
+        return get_localized("no_books", lang)
+    # Show only first 4 books, numbered
+    lines = [f"{i+1}. {Path(b).stem}" for i, b in enumerate(books[:4])]
+    text = get_localized("welcome_book_selection", lang) + "\n" + "\n".join(lines)
+    if len(books) > 4:
+        text += "\n... (more)"
+    return text[:155]
+
+def ussd_show_topic_list(book: str, lang: str) -> str:
+    """Short topic list for a given book."""
+    topic_list = topics.get(book, [])
+    if not topic_list:
+        return "No chapters."
+    lines = [f"{t['id']}. {t['title']}" for t in topic_list[:5]]
+    text = get_localized("topic_prompt", lang) + "\n" + "\n".join(lines)
+    if len(topic_list) > 5:
+        text += "\n... (more)"
+    return text[:155]
+
 def send_long_message(phone: str, text: str, provider: str, max_chars=500, lang="en"):
     text_with_footer = add_footer(text.strip(), lang)
     total_length = len(text_with_footer)
@@ -608,41 +668,137 @@ def ask_ussd(query: str, lang: str):
     return answer, source_line
 
 def ussd_router(session_id: str, phone: str, text: str) -> str:
-    """Process a USSD request and return the response text (max 182 chars)."""
-    session = ussd_sessions.setdefault(session_id, {"state": "main", "language": "en"})
+    """Full USSD state machine, mirrors handle_message."""
+    session = ussd_sessions.setdefault(session_id, {
+        "state": "language_selection",
+        "language": "en",
+        "selected_book": None,
+        "selected_topic": None
+    })
     lang = session["language"]
     user_input = text.strip() if text else ""
 
-    # Helper to prepend CON or END
     def respond(prefix, msg):
         return f"{prefix} {msg}"[:182]
 
-    # Fresh session
+    # ----- Fresh session (first request) -----
     if not user_input:
+        session["state"] = "language_selection"
+        session["selected_book"] = None
+        session["selected_topic"] = None
         return respond("CON", get_localized("ussd_welcome", lang))
 
-    # Language change
+    # ----- Global commands (work in any state) -----
     if user_input.upper() == "LANG":
         session["state"] = "language_selection"
         return respond("CON", get_localized("ussd_choose_lang", lang))
 
-    if session.get("state") == "language_selection":
+    if user_input == "0":
+        state = session.get("state")
+        if state == "book_selection":
+            session["state"] = "language_selection"
+            return respond("CON", get_localized("choose_language", lang))
+        elif state == "topic_selection":
+            session["state"] = "book_selection"
+            return respond("CON", ussd_show_book_list(lang))
+        elif state == "chatting":
+            session["state"] = "topic_selection"
+            book = session.get("selected_book")
+            if book:
+                return respond("CON", ussd_show_topic_list(book, lang))
+            else:
+                return respond("CON", ussd_show_book_list(lang))
+        else:
+            session["state"] = "language_selection"
+            return respond("CON", get_localized("choose_language", lang))
+
+    if user_input.lower() == "books":
+        session["state"] = "book_selection"
+        return respond("CON", ussd_show_book_list(lang))
+
+    if user_input.lower() == "topics":
+        book = session.get("selected_book")
+        if book:
+            session["state"] = "topic_selection"
+            return respond("CON", ussd_show_topic_list(book, lang))
+        else:
+            return respond("CON", "Select a book first. Use 'books'.")
+
+    if user_input.lower() == "menu":
+        if session.get("selected_book"):
+            session["state"] = "topic_selection"
+            return respond("CON", ussd_show_topic_list(session["selected_book"], lang))
+        else:
+            session["state"] = "book_selection"
+            return respond("CON", ussd_show_book_list(lang))
+
+    # ----- State machine -----
+    state = session.get("state", "language_selection")
+
+    if state == "language_selection":
         if user_input in ("1", "2"):
             lang_map = {"1": "en", "2": "sw"}
             new_lang = lang_map.get(user_input, "en")
             session["language"] = new_lang
-            session["state"] = "main"
-            return respond("END", get_localized("ussd_lang_set", new_lang))
+            session["state"] = "book_selection"
+            return respond("CON", "Lang set. " + ussd_show_book_list(new_lang))
         else:
             return respond("CON", get_localized("ussd_invalid_lang", lang))
 
-    # Main state – answer query
-    answer, source = ask_ussd(user_input, lang)
-    full = f"{answer}{source}"
-    # Ensure total length ≤ 160 to leave room for "END "
-    if len(full) > 155:
-        full = full[:152] + "..."
-    return respond("END", full)
+    elif state == "book_selection":
+        try:
+            idx = int(user_input) - 1
+            books = list(topics.keys())
+            if idx < 0 or idx >= len(books):
+                raise ValueError
+            book = books[idx]
+            session["selected_book"] = book
+            session["state"] = "topic_selection"
+            return respond("CON", ussd_show_topic_list(book, lang))
+        except (ValueError, IndexError):
+            return respond("CON", "Invalid book number. Try again.")
+
+    elif state == "topic_selection":
+        book = session.get("selected_book")
+        if not book:
+            return respond("CON", "Select a book first.")
+        topics_list = topics.get(book, [])
+        try:
+            idx = int(user_input) - 1
+            if idx < 0 or idx >= len(topics_list):
+                raise ValueError
+            topic = topics_list[idx]
+            session["selected_topic"] = topic
+            session["state"] = "chatting"
+            summary = ussd_send_topic_summary(book, topic, lang)
+            return respond("CON", summary + "\n0:Back | Ask a question")
+        except (ValueError, IndexError):
+            return respond("CON", "Invalid topic number. Try again.")
+
+    elif state == "chatting":
+        # 'more' sends the full part (first chunk)
+        if user_input.lower() == "more":
+            topic = session.get("selected_topic")
+            book = session.get("selected_book")
+            if topic and book:
+                title = topic["title"].strip()
+                filter_where = {"$and": [{"source": {"$eq": book}}, {"topic_title": {"$eq": title}}]}
+                ret = vectorstore.as_retriever(search_kwargs={"k": 1, "filter": filter_where})
+                docs = ret.invoke(title)
+                if docs:
+                    content = docs[0].page_content[:160]
+                    return respond("CON", content + "\n0:Back")
+            return respond("CON", "No more content.")
+
+        # Normal question → short answer
+        answer, source = ask_ussd(user_input, lang)
+        full = f"{answer}{source}"
+        if len(full) > 155:
+            full = full[:152] + "..."
+        return respond("CON", full + "\n0:Back | Ask another")
+
+    # Fallback
+    return respond("CON", "Type LANG for language, or ask a legal question.")
 
 # --- Book/Topic/Summary functions (same as before, but use database) ---
 def show_book_list(phone: str, provider: str):
