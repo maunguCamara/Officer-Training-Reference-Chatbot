@@ -632,23 +632,22 @@ def ussd_show_book_list(lang: str) -> str:
     books = list(topics.keys())
     if not books:
         return get_localized("no_books", lang)
-    # Show only first 4 books, numbered
     lines = [f"{i+1}. {Path(b).stem}" for i, b in enumerate(books[:4])]
     text = get_localized("welcome_book_selection", lang) + "\n" + "\n".join(lines)
     if len(books) > 4:
-        text += "\n... (more)"
+       text += "\n... (more)"
     return text[:155]
 
-def ussd_show_topic_list(book: str, lang: str) -> str:
-    """Short topic list for a given book."""
-    topic_list = topics.get(book, [])
-    if not topic_list:
-        return "No chapters."
-    lines = [f"{t['id']}. {t['title']}" for t in topic_list[:5]]
-    text = get_localized("topic_prompt", lang) + "\n" + "\n".join(lines)
-    if len(topic_list) > 5:
-        text += "\n... (more)"
-    return text[:155]
+#def ussd_show_topic_list(book: str, lang: str) -> str:
+#    """Short topic list for a given book."""
+#    topic_list = topics.get(book, [])
+#    if not topic_list:
+#        return "No chapters."
+#    lines = [f"{t['id']}. {t['title']}" for t in topic_list[:5]]
+#   text = get_localized("topic_prompt", lang) + "\n" + "\n".join(lines)
+#   if len(topic_list) > 5:
+#      text += "\n... (more)"
+#    return text[:155]
 
 def send_long_message(phone: str, text: str, provider: str, max_chars=500, lang="en"):
     text_with_footer = add_footer(text.strip(), lang)
@@ -697,12 +696,21 @@ def ussd_show_book_list_page(lang: str, session: dict) -> str:
     start = page * per_page
     end = start + per_page
     page_books = books[start:end]
+
+    # Build numbered list
     lines = []
     for i, b in enumerate(page_books, start=1):
         lines.append(f"{start + i}. {Path(b).stem}")
+
     text = "\n".join(lines)
+
+    # Add pagination hint only if there are more books
     if end < len(books):
         text += "\n* for more"
+
+    # Always show back
+    text += "\n0: Back"
+
     return text[:155]
 
 def ussd_show_topic_list_page(book: str, lang: str, session: dict) -> str:
@@ -713,10 +721,15 @@ def ussd_show_topic_list_page(book: str, lang: str, session: dict) -> str:
     start = page * per_page
     end = start + per_page
     page_topics = topic_list[start:end]
+
     lines = [f"{t['id']}. {t['title']}" for t in page_topics]
     text = "\n".join(lines)
+
     if end < len(topic_list):
         text += "\n* for more"
+
+    text += "\n0: Back"
+
     return text[:155]
 
 def ussd_router(session_id: str, phone: str, text: str) -> str:
@@ -832,7 +845,7 @@ def ussd_router(session_id: str, phone: str, text: str) -> str:
             session["language"] = new_lang
             session["state"] = "book_selection"
             session["books_page"] = 0
-            return respond("CON", "Lang set. " + ussd_show_book_list_page(new_lang, session))
+            return respond("CON",  ussd_show_book_list_page(new_lang, session))
         else:
             return respond("CON", get_localized("ussd_invalid_lang", lang))
 
@@ -840,7 +853,11 @@ def ussd_router(session_id: str, phone: str, text: str) -> str:
     elif state == "book_selection":
         if user_input == "*":
             # Next page
-            session["books_page"] += 1
+            books = list(topics.keys())
+            page = session.get("books_page", 0)
+            per_page = 3
+            if (page + 1) * per_page < len(books):
+                session["books_page"] += 1
             return respond("CON", ussd_show_book_list_page(lang, session))
         try:
             idx = int(user_input) - 1
@@ -860,7 +877,12 @@ def ussd_router(session_id: str, phone: str, text: str) -> str:
     # --- Topic selection ---
     elif state == "topic_selection":
         if user_input == "*":
-            session["topics_page"] += 1
+            book = session.get("selected_book")
+            topics_list = topics.get(book, [])
+            page = session.get("topics_page", 0)
+            per_page = 5
+            if (page + 1) * per_page < len(topics_list):
+                session["topics_page"] += 1
             return respond("CON", ussd_show_topic_list_page(session["selected_book"], lang, session))
         book = session.get("selected_book")
         if not book:
