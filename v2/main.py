@@ -372,6 +372,28 @@ def _background_ingest():
     finally:
         ingestion_in_progress = False
 
+def split_ussd_text(text: str, max_chars: int = 150) -> list:
+    """Split text into chunks ≤ max_chars, trying to break at spaces."""
+    words = text.split()
+    chunks = []
+    current = ""
+    for word in words:
+        if len(current) + len(word) + 1 <= max_chars:
+            current = (current + " " + word).strip()
+        else:
+            if current:
+                chunks.append(current)
+            # If a single word is too long, hard‑split it
+            if len(word) > max_chars:
+                for i in range(0, len(word), max_chars):
+                    chunks.append(word[i:i+max_chars])
+                current = ""
+            else:
+                current = word
+    if current:
+        chunks.append(current)
+    return chunks
+
 # Flag to check while ingestion is in progress
 ingestion_in_progress = False
 init_vectorstore(force_rebuild=False)
@@ -977,7 +999,7 @@ async def ussd_endpoint(
     current_input = parts[-1] if parts else ""
     response_text = ussd_router(sessionId, phoneNumber, current_input)
     return PlainTextResponse(response_text)
-    
+
 @app.get("/webhook")
 async def meta_verify(hub_mode=Query(alias="hub.mode"), hub_challenge=Query(alias="hub.challenge"),
                       hub_verify_token=Query(alias="hub.verify_token")):
