@@ -689,6 +689,36 @@ def ask_ussd(query: str, lang: str):
     source_line = f" ({source} p.{page})"
     return answer, source_line
 
+def ussd_show_book_list_page(lang: str, session: dict) -> str:
+    """Show one page of the book list (3 books per page)."""
+    books = list(topics.keys())
+    page = session.get("books_page", 0)
+    per_page = 3
+    start = page * per_page
+    end = start + per_page
+    page_books = books[start:end]
+    lines = []
+    for i, b in enumerate(page_books, start=1):
+        lines.append(f"{start + i}. {Path(b).stem}")
+    text = "\n".join(lines)
+    if end < len(books):
+        text += "\n* for more"
+    return text[:155]
+
+def ussd_show_topic_list_page(book: str, lang: str, session: dict) -> str:
+    """Show one page of the topic list (5 topics per page)."""
+    topic_list = topics.get(book, [])
+    page = session.get("topics_page", 0)
+    per_page = 5
+    start = page * per_page
+    end = start + per_page
+    page_topics = topic_list[start:end]
+    lines = [f"{t['id']}. {t['title']}" for t in page_topics]
+    text = "\n".join(lines)
+    if end < len(topic_list):
+        text += "\n* for more"
+    return text[:155]
+
 def ussd_router(session_id: str, phone: str, text: str) -> str:
     """Full USSD state machine with pagination and multi‑part answers."""
     session = ussd_sessions.setdefault(session_id, {
