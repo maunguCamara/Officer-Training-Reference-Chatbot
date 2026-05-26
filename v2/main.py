@@ -690,12 +690,16 @@ def ask_ussd(query: str, lang: str):
     return answer, source_line
 
 def ussd_router(session_id: str, phone: str, text: str) -> str:
-    """Full USSD state machine, mirrors handle_message."""
+    """Full USSD state machine with pagination and multi‑part answers."""
     session = ussd_sessions.setdefault(session_id, {
         "state": "language_selection",
         "language": "en",
         "selected_book": None,
-        "selected_topic": None
+        "selected_topic": None,
+        "books_page": 0,          # current page for book list
+        "topics_page": 0,         # current page for topic list
+        "chat_parts": [],         # list of answer parts
+        "chat_part_idx": 0,       # index of next part to send
     })
     lang = session["language"]
     user_input = text.strip() if text else ""
@@ -703,102 +707,152 @@ def ussd_router(session_id: str, phone: str, text: str) -> str:
     def respond(prefix, msg):
         return f"{prefix} {msg}"[:182]
 
-    # ----- Fresh session (first request) -----
+    # ----- Fresh session -----
     if not user_input:
-        session["state"] = "language_selection"
-        session["selected_book"] = None
-        session["selected_topic"] = None
+        session.update({
+            "state": "language_selection",
+            "selected_book": None,
+            "selected_topic": None,
+            "books_page": 0,
+            "topics_page": 0,
+            "chat_parts": [],
+            "chat_part_idx": 0
+        })
         return respond("CON", get_localized("ussd_welcome", lang))
 
     # ----- Global commands (work in any state) -----
     if user_input.upper() == "LANG":
         session["state"] = "language_selection"
+        session["books_page"] = 0
+        session["topics_page"] = 0
         return respond("CON", get_localized("ussd_choose_lang", lang))
 
     if user_input == "0":
         state = session.get("state")
         if state == "book_selection":
             session["state"] = "language_selection"
+            session["books_page"] = 0
             return respond("CON", get_localized("choose_language", lang))
         elif state == "topic_selection":
             session["state"] = "book_selection"
-            return respond("CON", ussd_show_book_list(lang))
+            session["topics_page"] = 0
+            return respond("CON", ussd_show_book_list_page(lang, session))
         elif state == "chatting":
+            # End multi‑part viewing if active
+            session["chat_parts"] = []
+            session["chat_part_idx"] = 0
             session["state"] = "topic_selection"
             book = session.get("selected_book")
             if book:
-                return respond("CON", ussd_show_topic_list(book, lang))
+                return respond("CON", ussd_show_topic_list_page(book, lang, session))
             else:
-                return respond("CON", ussd_show_book_list(lang))
+                return respond("CON", ussd_show_book_list_page(lang, session))
         else:
             session["state"] = "language_selection"
             return respond("CON", get_localized("choose_language", lang))
 
     if user_input.lower() == "books":
         session["state"] = "book_selection"
-        return respond("CON", ussd_show_book_list(lang))
+        session["books_page"] = 0
+        return respond("CON", ussd_show_book_list_page(lang, session))
 
     if user_input.lower() == "topics":
         book = session.get("selected_book")
         if book:
             session["state"] = "topic_selection"
-            return respond("CON", ussd_show_topic_list(book, lang))
+            session["topics_page"] = 0
+            return respond("CON", ussd_show_topic_list_page(book, lang, session))
         else:
             return respond("CON", "Select a book first. Use 'books'.")
 
-    if user_input.lower() == "menu":
-        if session.get("selected_book"):
-            session["state"] = "topic_selection"
-            return respond("CON", ussd_show_topic_list(session["selected_book"], lang))
-        else:
-            session["state"] = "book_selection"
-            return respond("CON", ussd_show_book_list(lang))
+    # ----- Multi‑part answer continuation (chatting state) -----
+    if session.get("state") == "chatting" and session.get("chat_parts"):
+        # User can type "1" for next part, "0" to end
+        if user_input == "1":
+            idx = session["chat_part_idx"]
+            parts = session["chat_parts"]
+            if idx < len(parts):
+                chunk = parts[idx]
+                session["chat_part_idx"] = idx + 1
+                if session["chat_part_idx"] >= len(parts):
+                    # Last part
+                    session["chat_parts"] = []
+                    session["chat_part_idx"] = 0
+                    return respond("END", chunk)
+                else:
+                    return respond("CON", chunk + "\nReply 1 for more, 0 to end")
+            else:
+                session["chat_parts"] = []
+                session["chat_part_idx"] = 0
+                return respond("END", "End of answer.")
+        elif user_input == "0":
+            session["chat_parts"] = []
+            session["chat_part_idx"] = 0
+            return respond("END", "Thank you.")
+        # else fall through to normal chatting (could be a new question)
 
     # ----- State machine -----
     state = session.get("state", "language_selection")
 
+    # --- Language selection ---
     if state == "language_selection":
         if user_input in ("1", "2"):
             lang_map = {"1": "en", "2": "sw"}
             new_lang = lang_map.get(user_input, "en")
             session["language"] = new_lang
             session["state"] = "book_selection"
-            return respond("CON", "Lang set. " + ussd_show_book_list(new_lang))
+            session["books_page"] = 0
+            return respond("CON", "Lang set. " + ussd_show_book_list_page(new_lang, session))
         else:
             return respond("CON", get_localized("ussd_invalid_lang", lang))
 
+    # --- Book selection ---
     elif state == "book_selection":
+        if user_input == "*":
+            # Next page
+            session["books_page"] += 1
+            return respond("CON", ussd_show_book_list_page(lang, session))
         try:
             idx = int(user_input) - 1
             books = list(topics.keys())
-            if idx < 0 or idx >= len(books):
+            # Account for pagination offset
+            offset = session.get("books_page", 0) * 3
+            if idx + offset < 0 or idx + offset >= len(books):
                 raise ValueError
-            book = books[idx]
+            book = books[idx + offset]
             session["selected_book"] = book
             session["state"] = "topic_selection"
-            return respond("CON", ussd_show_topic_list(book, lang))
+            session["topics_page"] = 0
+            return respond("CON", ussd_show_topic_list_page(book, lang, session))
         except (ValueError, IndexError):
-            return respond("CON", "Invalid book number. Try again.")
+            return respond("CON", "Invalid. Reply number or * for more.")
 
+    # --- Topic selection ---
     elif state == "topic_selection":
+        if user_input == "*":
+            session["topics_page"] += 1
+            return respond("CON", ussd_show_topic_list_page(session["selected_book"], lang, session))
         book = session.get("selected_book")
         if not book:
             return respond("CON", "Select a book first.")
         topics_list = topics.get(book, [])
         try:
             idx = int(user_input) - 1
-            if idx < 0 or idx >= len(topics_list):
+            offset = session.get("topics_page", 0) * 5
+            if idx + offset < 0 or idx + offset >= len(topics_list):
                 raise ValueError
-            topic = topics_list[idx]
+            topic = topics_list[idx + offset]
             session["selected_topic"] = topic
             session["state"] = "chatting"
             summary = ussd_send_topic_summary(book, topic, lang)
+            # Summary should be short; no pagination needed
             return respond("CON", summary + "\n0:Back | Ask a question")
         except (ValueError, IndexError):
-            return respond("CON", "Invalid topic number. Try again.")
+            return respond("CON", "Invalid. Reply number or * for more.")
 
+    # --- Chatting (Q&A) ---
     elif state == "chatting":
-        # 'more' sends the full part (first chunk)
+        # 'more' to see full part (first chunk)
         if user_input.lower() == "more":
             topic = session.get("selected_topic")
             book = session.get("selected_book")
@@ -808,20 +862,32 @@ def ussd_router(session_id: str, phone: str, text: str) -> str:
                 ret = vectorstore.as_retriever(search_kwargs={"k": 1, "filter": filter_where})
                 docs = ret.invoke(title)
                 if docs:
-                    content = docs[0].page_content[:160]
-                    return respond("CON", content + "\n0:Back")
+                    content = docs[0].page_content
+                    # Split long content
+                    parts = split_ussd_text(content, max_chars=150)
+                    if len(parts) > 1:
+                        session["chat_parts"] = parts
+                        session["chat_part_idx"] = 1  # next part index
+                        return respond("CON", parts[0] + "\nReply 1 for more, 0 to end")
+                    else:
+                        return respond("CON", content[:150] + "\n0:Back")
             return respond("CON", "No more content.")
 
-        # Normal question → short answer
+        # Normal question → answer (possibly multi‑part)
         answer, source = ask_ussd(user_input, lang)
         full = f"{answer}{source}"
-        if len(full) > 155:
-            full = full[:152] + "..."
-        return respond("CON", full + "\n0:Back | Ask another")
+        if len(full) <= 150:
+            return respond("CON", full + "\n0:Back | Ask another")
+
+        # Long answer: split into parts
+        parts = split_ussd_text(full, max_chars=150)
+        session["chat_parts"] = parts
+        session["chat_part_idx"] = 1  # next part index
+        first_chunk = parts[0]
+        return respond("CON", first_chunk + "\nReply 1 for more, 0 to end")
 
     # Fallback
     return respond("CON", "Type LANG for language, or ask a legal question.")
-
 # --- Book/Topic/Summary functions (same as before, but use database) ---
 def show_book_list(phone: str, provider: str):
     user = database.get_user(phone) or {}
