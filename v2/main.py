@@ -627,27 +627,53 @@ def ussd_send_topic_summary(book: str, topic: dict, lang: str) -> str:
         answer = topic_title
     return answer[:150] + "..."
 
-def ussd_show_book_list(lang: str) -> str:
-    """Short book list for USSD."""
+def ussd_show_book_list_page(lang: str, session: dict) -> str:
     books = list(topics.keys())
-    if not books:
-        return get_localized("no_books", lang)
-    lines = [f"{i+1}. {Path(b).stem}" for i, b in enumerate(books[:4])]
-    text = get_localized("welcome_book_selection", lang) + "\n" + "\n".join(lines)
-    if len(books) > 4:
-       text += "\n... (more)"
+    page = session.get("books_page", 0)
+    per_page = 2
+    start = page * per_page
+    end = start + per_page
+    page_books = books[start:end]
+
+    lines = []
+    for i, b in enumerate(page_books, start=1):
+        name = Path(b).stem
+        if len(name) > 30:
+            name = name[:27] + "..."
+        lines.append(f"{start + i}. {name}")
+
+    text = "\n".join(lines)
+    if end < len(books):
+        text += "\n* for more"
+    text += "\n0: Back"
     return text[:155]
 
-#def ussd_show_topic_list(book: str, lang: str) -> str:
-#    """Short topic list for a given book."""
-#    topic_list = topics.get(book, [])
-#    if not topic_list:
-#        return "No chapters."
-#    lines = [f"{t['id']}. {t['title']}" for t in topic_list[:5]]
-#   text = get_localized("topic_prompt", lang) + "\n" + "\n".join(lines)
-#   if len(topic_list) > 5:
-#      text += "\n... (more)"
-#    return text[:155]
+def ussd_show_topic_list_page(book: str, lang: str, session: dict) -> str:
+    """Show one page of the topic list (up to 3 topics per page, titles trimmed)."""
+    topic_list = topics.get(book, [])
+    page = session.get("topics_page", 0)
+    per_page = 3                    # fewer topics → more room for readable titles
+    start = page * per_page
+    end = start + per_page
+    page_topics = topic_list[start:end]
+
+    lines = []
+    for t in page_topics:
+        # Shorten long titles to avoid mid‑word cut‑off
+        title = t['title']
+        if len(title) > 35:         # keep first 32 chars + "..."
+            title = title[:32] + "..."
+        lines.append(f"{t['id']}. {title}")
+
+    text = "\n".join(lines)
+
+    # Pagination hint only if there are more topics
+    if end < len(topic_list):
+        text += "\n* for more"
+
+    text += "\n0: Back"
+
+    return text[:155]               # safety truncation, though it should already fit
 
 def send_long_message(phone: str, text: str, provider: str, max_chars=500, lang="en"):
     text_with_footer = add_footer(text.strip(), lang)
@@ -880,7 +906,7 @@ def ussd_router(session_id: str, phone: str, text: str) -> str:
             book = session.get("selected_book")
             topics_list = topics.get(book, [])
             page = session.get("topics_page", 0)
-            per_page = 5
+            per_page = 3
             if (page + 1) * per_page < len(topics_list):
                 session["topics_page"] += 1
             return respond("CON", ussd_show_topic_list_page(session["selected_book"], lang, session))
@@ -898,7 +924,7 @@ def ussd_router(session_id: str, phone: str, text: str) -> str:
             session["state"] = "chatting"
             summary = ussd_send_topic_summary(book, topic, lang)
             # Summary should be short; no pagination needed
-            return respond("CON", summary + "\n0:Back | Ask a question")
+            return respond("CON", summary + "\n0:Back | * for more | Ask a question")
         except (ValueError, IndexError):
             return respond("CON", "Invalid. Reply number or * for more.")
 
