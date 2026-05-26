@@ -965,15 +965,19 @@ async def telegram_webhook(request: Request):
     handle_message(chat_id, text, provider="telegram")
     return PlainTextResponse("", status_code=200)
 
+
 @app.post("/ussd")
 async def ussd_endpoint(
     sessionId: str = Form(...),
     phoneNumber: str = Form(...),
     text: str = Form(default="")
 ):
-    response_text = ussd_router(sessionId, phoneNumber, text)
+    # Africa's Talking sends accumulated input separated by '*'
+    parts = text.split("*") if text else []
+    current_input = parts[-1] if parts else ""
+    response_text = ussd_router(sessionId, phoneNumber, current_input)
     return PlainTextResponse(response_text)
-
+    
 @app.get("/webhook")
 async def meta_verify(hub_mode=Query(alias="hub.mode"), hub_challenge=Query(alias="hub.challenge"),
                       hub_verify_token=Query(alias="hub.verify_token")):
