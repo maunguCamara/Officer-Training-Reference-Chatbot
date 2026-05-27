@@ -287,7 +287,7 @@ def get_localized(key: str, lang: str = "en") -> str:
     translations = {
         "en": {
             "choose_language": "Please choose your language:\n1. English\n2. Kiswahili",
-            "welcome_book_selection": "Great! Here are the available books:",
+            "welcome_book_selection": "Welcome to the legal training service! Here are the available books in context:",
             "book_prompt": "Reply with the number of the book you want to explore.",
             "topic_prompt": "Choose a topic by number:",
             "disclaimer": "\n\n---\n*This is not legal advice...*",
@@ -299,9 +299,9 @@ def get_localized(key: str, lang: str = "en") -> str:
             "feedback_thanks": "Thank you for your feedback!",
             "search_prompt": "Usage: /search your question",
             "search_no_results": "No matching content found.",
-            "ussd_welcome": "Welcome to the legal training service! Please choose your language:\n1. English\n2. Kiswahili",
-            "ussd_choose_lang": "Please choose your language:\n1. English\n2. Kiswahili",
-            "ussd_lang_set": "Language set successfully!",
+            "ussd_welcome": " Welcome Sheria Mkononi/ Karibu Sheria Mkononi",
+            "ussd_choose_lang": "Please choose your language / Tafadhali chagua lugha:\n1. English\n2. Kiswahili",
+            "ussd_lang_set": "Welcome to the legal training service!!",
             "ussd_invalid_lang": "Invalid language choice. Please choose again.",
             "ussd_no_answer": "No answer available.",
             "ussd_error": "An error occurred while processing your request."
@@ -320,9 +320,9 @@ def get_localized(key: str, lang: str = "en") -> str:
             "feedback_thanks": "Asante kwa maoni yako!",
             "search_prompt": "Matumizi: /search swali lako",
             "search_no_results": "Hakuna maudhui yanayolingana.",
-            "ussd_welcome": "Karibu kwenye huduma ya mafunzo ya sheria! Tafadhali chagua lugha:\n1. English\n2. Kiswahili",
+            "ussd_welcome": " Welcome Sheria Mkononi/ Karibu Sheria Mkononi",
             "ussd_choose_lang": "Tafadhali chagua lugha:\n1. English\n2. Kiswahili",
-            "ussd_lang_set": "Lugha imewekwa kwa ufanisi!",
+            "ussd_lang_set": "Karibu kwenye huduma ya mafunzo ya sheria",
             "ussd_invalid_lang": "Lugha si sahihi. Tafadhali chagua tena.",
             "ussd_no_answer": "Hakuna jibu linalopatikana.",
             "ussd_error": "Kosa limetokea wakati wa kufanya utafutaji."
@@ -787,7 +787,7 @@ def ussd_router(session_id: str, phone: str, text: str) -> str:
             "chat_parts": [],
             "chat_part_idx": 0
         })
-        return respond("CON", get_localized("ussd_welcome", lang))
+        return respond("CON", get_localized("ussd_welcome", lang) + "\n" + get_localized("ussd_choose_lang", lang))
 
     # ----- Global commands (work in any state) -----
     if user_input.upper() == "LANG":
