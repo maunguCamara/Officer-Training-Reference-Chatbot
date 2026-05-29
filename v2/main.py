@@ -257,8 +257,8 @@ def add_footer(text: str, lang: str = "en") -> str:
 
 LOCALIZED = {
     "en": {
-        "choose_language": "Please choose your language:\n1. English\n2. Kiswahili\n3. Pukuti\n4. Français\n5. Deutsch",
-        "welcome_book_selection": "Here are the available books:",
+        "choose_language": "Welcome / Karibu Sheria Mkononi!. Please choose your language / Chagua lugha :\n1. English\n2. Kiswahili\n3. Pukuti\n4. Français\n5. Deutsch",
+        "welcome_book_selection": "Here are the legal documents in context:",
         "topic_prompt": "Pick a topic:",
         "disclaimer": "\n\n---\n*This is not legal advice...*",
         "menu": "Type *menu* to see topics again, or *0* to go back.",
@@ -270,7 +270,7 @@ LOCALIZED = {
     },
     "sw": {
         "choose_language": "Tafadhali chagua lugha:\n1. English\n2. Kiswahili\n...",
-        "welcome_book_selection": "Sawa! Hapa kuna vitabu:",
+        "welcome_book_selection": "Hizi ndizo hati za kisheria zinazopatikana :",
         "topic_prompt": "Chagua mada:",
         "disclaimer": "\n\n---\n*Huu sio ushauri wa kisheria...*",
         "menu": "Andika *menu* ili kuona mada tena, au *0* kurudi nyuma.",
@@ -286,8 +286,8 @@ def get_localized(key: str, lang: str = "en") -> str:
     # Shorter, often used translations (same as before)
     translations = {
         "en": {
-            "choose_language": "Please choose your language:\n1. English\n2. Kiswahili",
-            "welcome_book_selection": "Welcome to the legal training service! Here are the available books in context:",
+            "choose_language": "Sheria Mkononi. Please choose your language \ Tafadhali chagua lugha :\n1. English\n2. Kiswahili",
+            "welcome_book_selection": "Welcome to Sheria Mkononi. Available legal documents in context:",
             "book_prompt": "Reply with the number of the book you want to explore.",
             "topic_prompt": "Choose a topic by number:",
             "disclaimer": "\n\n---\n*This is not legal advice...*",
@@ -296,19 +296,19 @@ def get_localized(key: str, lang: str = "en") -> str:
             "no_books": "No books available yet.",
             "feedback_prompt": "Was this helpful? Reply /feedback yes or /feedback no",
             "feedback_invalid": "Invalid. Reply /feedback yes or /feedback no",
-            "feedback_thanks": "Thank you for your feedback!",
+            "feedback_thanks": "Thank you for your feedback",
             "search_prompt": "Usage: /search your question",
             "search_no_results": "No matching content found.",
-            "ussd_welcome": " Welcome Sheria Mkononi/ Karibu Sheria Mkononi",
+            "ussd_welcome": "Sheria Mkononi",
             "ussd_choose_lang": "Please choose your language / Tafadhali chagua lugha:\n1. English\n2. Kiswahili",
-            "ussd_lang_set": "Welcome to the legal training service!!",
+            "ussd_lang_set": "Welcome to the legal training service",
             "ussd_invalid_lang": "Invalid language choice. Please choose again.",
             "ussd_no_answer": "No answer available.",
             "ussd_error": "An error occurred while processing your request."
         },
         "sw": {
             "choose_language": "Tafadhali chagua lugha:\n1. English\n2. Kiswahili",
-            "welcome_book_selection": "Sawa! Haya ndiyo vitabu vinavyopatikana:",
+            "welcome_book_selection": "Karibu Sheria Mkononi.Hizi ndizo hati za kisheria zinazopatikana:",
             "book_prompt": "Jibu kwa nambari ya kitabu unachotaka kukisoma.",
             "topic_prompt": "Chagua mada kwa nambari:",
             "disclaimer": "\n\n---\n*Huu sio ushauri wa kisheria...*",
@@ -317,7 +317,7 @@ def get_localized(key: str, lang: str = "en") -> str:
             "no_books": "Hakuna vitabu bado.",
             "feedback_prompt": "Je, hii ilikusaidia? Jibu /feedback ndio au /feedback la",
             "feedback_invalid": "Batili. Jibu /feedback ndio au /feedback la",
-            "feedback_thanks": "Asante kwa maoni yako!",
+            "feedback_thanks": "Asante kwa maoni yako",
             "search_prompt": "Matumizi: /search swali lako",
             "search_no_results": "Hakuna maudhui yanayolingana.",
             "ussd_welcome": " Welcome Sheria Mkononi/ Karibu Sheria Mkononi",
@@ -601,6 +601,8 @@ def handle_message(phone: str, text: str, provider: str):
         database.save_analytics("question", phone)
         send_long_message(phone, full_reply, provider, lang=lang)
         return
+# ====== USSD session ==========
+ussd_sessions = {}  # still in memory for USSD
 
 def ussd_send_topic_summary(book: str, topic: dict, lang: str) -> str:
     """Return a USSD‑safe summary of a topic (≤150 chars)."""
@@ -628,6 +630,7 @@ def ussd_send_topic_summary(book: str, topic: dict, lang: str) -> str:
     return answer[:150] + "..."
 
 def ussd_show_book_list_page(lang: str, session: dict) -> str:
+    """2 books per page, with '0: Back' and '* for more' if needed."""
     books = list(topics.keys())
     page = session.get("books_page", 0)
     per_page = 2
@@ -649,31 +652,27 @@ def ussd_show_book_list_page(lang: str, session: dict) -> str:
     return text[:155]
 
 def ussd_show_topic_list_page(book: str, lang: str, session: dict) -> str:
-    """Show one page of the topic list (up to 3 topics per page, titles trimmed)."""
+    """3 topics per page, with '0: Back' and '* for more' if needed."""
     topic_list = topics.get(book, [])
     page = session.get("topics_page", 0)
-    per_page = 3                    # fewer topics → more room for readable titles
+    per_page = 3
     start = page * per_page
     end = start + per_page
     page_topics = topic_list[start:end]
 
     lines = []
     for t in page_topics:
-        # Shorten long titles to avoid mid‑word cut‑off
         title = t['title']
-        if len(title) > 35:         # keep first 32 chars + "..."
+        if len(title) > 35:
             title = title[:32] + "..."
         lines.append(f"{t['id']}. {title}")
 
     text = "\n".join(lines)
-
-    # Pagination hint only if there are more topics
     if end < len(topic_list):
         text += "\n* for more"
-
     text += "\n0: Back"
+    return text[:155]
 
-    return text[:155]               # safety truncation, though it should already fit
 
 def send_long_message(phone: str, text: str, provider: str, max_chars=500, lang="en"):
     text_with_footer = add_footer(text.strip(), lang)
@@ -714,50 +713,7 @@ def ask_ussd(query: str, lang: str):
     source_line = f" ({source} p.{page})"
     return answer, source_line
 
-def ussd_show_book_list_page(lang: str, session: dict) -> str:
-    """Show one page of the book list (3 books per page)."""
-    books = list(topics.keys())
-    page = session.get("books_page", 0)
-    per_page = 3
-    start = page * per_page
-    end = start + per_page
-    page_books = books[start:end]
-
-    # Build numbered list
-    lines = []
-    for i, b in enumerate(page_books, start=1):
-        lines.append(f"{start + i}. {Path(b).stem}")
-
-    text = "\n".join(lines)
-
-    # Add pagination hint only if there are more books
-    if end < len(books):
-        text += "\n* for more"
-
-    # Always show back
-    text += "\n0: Back"
-
-    return text[:155]
-
-def ussd_show_topic_list_page(book: str, lang: str, session: dict) -> str:
-    """Show one page of the topic list (5 topics per page)."""
-    topic_list = topics.get(book, [])
-    page = session.get("topics_page", 0)
-    per_page = 5
-    start = page * per_page
-    end = start + per_page
-    page_topics = topic_list[start:end]
-
-    lines = [f"{t['id']}. {t['title']}" for t in page_topics]
-    text = "\n".join(lines)
-
-    if end < len(topic_list):
-        text += "\n* for more"
-
-    text += "\n0: Back"
-
-    return text[:155]
-
+# ========== USSD Router ==========
 def ussd_router(session_id: str, phone: str, text: str) -> str:
     """Full USSD state machine with pagination and multi‑part answers."""
     session = ussd_sessions.setdefault(session_id, {
@@ -877,19 +833,16 @@ def ussd_router(session_id: str, phone: str, text: str) -> str:
 
     # --- Book selection ---
     elif state == "book_selection":
+        books = list(topics.keys())
+        per_page = 2
         if user_input == "*":
-            # Next page
-            books = list(topics.keys())
             page = session.get("books_page", 0)
-            per_page = 3
             if (page + 1) * per_page < len(books):
                 session["books_page"] += 1
             return respond("CON", ussd_show_book_list_page(lang, session))
         try:
             idx = int(user_input) - 1
-            books = list(topics.keys())
-            # Account for pagination offset
-            offset = session.get("books_page", 0) * 3
+            offset = session.get("books_page", 0) * per_page
             if idx + offset < 0 or idx + offset >= len(books):
                 raise ValueError
             book = books[idx + offset]
@@ -901,22 +854,20 @@ def ussd_router(session_id: str, phone: str, text: str) -> str:
             return respond("CON", "Invalid. Reply number or * for more.")
 
     # --- Topic selection ---
-    elif state == "topic_selection":
-        if user_input == "*":
-            book = session.get("selected_book")
-            topics_list = topics.get(book, [])
-            page = session.get("topics_page", 0)
-            per_page = 3
-            if (page + 1) * per_page < len(topics_list):
-                session["topics_page"] += 1
-            return respond("CON", ussd_show_topic_list_page(session["selected_book"], lang, session))
+    elif state == "topic_selection":        
         book = session.get("selected_book")
         if not book:
             return respond("CON", "Select a book first.")
         topics_list = topics.get(book, [])
+        per_page = 3  
+        if user_input == "*":
+            page = session.get("topics_page", 0)
+            if (page + 1) * per_page < len(topics_list):
+                session["topics_page"] += 1
+            return respond("CON", ussd_show_topic_list_page(session["selected_book"], lang, session))
         try:
             idx = int(user_input) - 1
-            offset = session.get("topics_page", 0) * 5
+            offset = session.get("topics_page", 0) * per_page
             if idx + offset < 0 or idx + offset >= len(topics_list):
                 raise ValueError
             topic = topics_list[idx + offset]
@@ -1102,16 +1053,8 @@ async def health_check():
         status["llm"] = f"error: {e}"
     return status
 
-# ========== USSD (unchanged, but now uses database) ==========
-# (You can refactor USSD similarly to use database for session storage if needed)
-# For now, USSD still uses in-memory dictionaries; you can migrate later.
-ussd_sessions = {}  # still in memory for USSD
-# ... (keep existing USSD functions unchanged) ...
 
-# Webhook endpoints same as before
-# ... (keep Meta verify, Meta webhook, Twilio webhook, Telegram webhook) ...
-# Note: In Meta webhook and Twilio webhook, replace user_data accesses with database functions.
-# I'll show the updated webhooks below.
+
 
 # ========== Webhook Endpoints ==========
 @app.api_route("/webhook/telegram", methods=["GET", "POST"])
@@ -1131,7 +1074,6 @@ async def telegram_webhook(request: Request):
     handle_message(chat_id, text, provider="telegram")
     return PlainTextResponse("", status_code=200)
 
-
 @app.post("/ussd")
 async def ussd_endpoint(
     sessionId: str = Form(...),
@@ -1139,8 +1081,11 @@ async def ussd_endpoint(
     text: str = Form(default="")
 ):
     # Africa's Talking sends accumulated input separated by '*'
-    parts = text.split("*") if text else []
-    current_input = parts[-1] if parts else ""
+    if text and text.endswith("*"):
+        current_input = "*"
+    else:
+        parts = text.split("*") if text else []
+        current_input = parts[-1] if parts else ""
     response_text = ussd_router(sessionId, phoneNumber, current_input)
     return PlainTextResponse(response_text)
 
