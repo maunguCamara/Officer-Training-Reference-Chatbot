@@ -32,6 +32,11 @@ import database
 
 load_dotenv()
 
+
+# ========== SMS via Africa's Talking ==========
+AT_USERNAME = os.getenv("AT_USERNAME", "")        # usually "sandbox" for sandbox
+AT_API_KEY   = os.getenv("AT_API_KEY", "")
+
 # ========== Provider Setup ==========
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
 USE_E5 = os.getenv("USE_E5", "false").lower() == "true"   # set to 'true' for better multilingual embeddings
@@ -257,7 +262,7 @@ def add_footer(text: str, lang: str = "en") -> str:
 
 LOCALIZED = {
     "en": {
-        "choose_language": "Welcome / Karibu Sheria Mkononi!. Please choose your language / Chagua lugha :\n1. English\n2. Kiswahili\n3. Pukuti\n4. Français\n5. Deutsch",
+        "choose_language": "Welcome / Karibu Sheria Mkononi!. Please choose a language / Chagua lugha :\n1. English\n2. Kiswahili\n3. Pukuti\n4. Français\n5. Deutsch",
         "welcome_book_selection": "Here are the legal documents in context:",
         "topic_prompt": "Pick a topic:",
         "disclaimer": "\n\n---\n*This is not legal advice...*",
@@ -685,6 +690,27 @@ def send_long_message(phone: str, text: str, provider: str, max_chars=500, lang=
         send_message(phone, chunk, provider)
 
 
+def send_sms(phone: str, message: str):
+    """Send an SMS using Africa's Talking REST API."""
+    if not AT_USERNAME or not AT_API_KEY:
+        print("❌ AT SMS credentials not set.")
+        return
+    url = "https://api.africastalking.com/version1/messaging"
+    headers = {
+        "apiKey": AT_API_KEY,
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+    data = {
+        "username": AT_USERNAME,
+        "to": phone,
+        "message": message
+    }
+    try:
+        resp = requests.post(url, data=data, headers=headers, timeout=10)
+        print("📱 SMS sent, response:", resp.json())
+    except Exception as e:
+        print("📱 SMS send error:", e)
+
 def ask_ussd(query: str, lang: str):
     """Run global retrieval and return (short_answer, source_info)."""
     # Use a global retriever (no filter) to get the most relevant chunks
@@ -724,8 +750,10 @@ def ussd_router(session_id: str, phone: str, text: str) -> str:
         "books_page": 0,          # current page for book list
         "topics_page": 0,         # current page for topic list
         "chat_parts": [],         # list of answer parts
-        "chat_part_idx": 0,       # index of next part to send
+        "chat_part_idx": 0, 
+        "phoneNumber": phone      # index of next part to send
     })
+    session["phoneNumber"] = phone  # Update phone number in case it changes (some USSD providers reuse session IDs)
     lang = session["language"]
     user_input = text.strip() if text else ""
 
@@ -901,19 +929,37 @@ def ussd_router(session_id: str, phone: str, text: str) -> str:
                     else:
                         return respond("CON", content[:150] + "\n0:Back")
             return respond("CON", "No more content.")
-
+        #SMS fallback for any other question    
+    
+        phone_number = session.get("phoneNumber", "")
+        if not phone_number:
+            return respond("CON", "Error: phone number missing.")
+        
+        def process_and_send():
+            try:
+                ans, src = ask_ussd(user_input, lang)
+                full = f"{ans}{src}"
+                if len(full) <= 160:
+                    full = full[:157] + "..."
+                send_sms(phone_number, full)
+            except Exception as e:
+                print("SMS background error:", e)
+        
+        threading.Thread(target=process_and_send, daemon=True).start()
+        return respond("CON", "Answer is being sent to your SMS.")
         # Normal question → answer (possibly multi‑part)
-        answer, source = ask_ussd(user_input, lang)
-        full = f"{answer}{source}"
-        if len(full) <= 150:
-            return respond("CON", full + "\n0:Back | Ask another")
+        #answer, source = ask_ussd(user_input, lang)
+        #full = f"{answer}{source}"
+        #if len(full) <= 150:
+        #    return respond("CON", full + "\n0:Back | Ask another")
+
 
         # Long answer: split into parts
-        parts = split_ussd_text(full, max_chars=150)
-        session["chat_parts"] = parts
-        session["chat_part_idx"] = 1  # next part index
-        first_chunk = parts[0]
-        return respond("CON", first_chunk + "\nReply 1 for more, 0 to end")
+        #parts = split_ussd_text(full, max_chars=150)
+        #session["chat_parts"] = parts
+        #session["chat_part_idx"] = 1  # next part index
+        #first_chunk = parts[0]
+        #return respond("CON", first_chunk + "\nReply 1 for more, 0 to end")
 
     # Fallback
     return respond("CON", "Type LANG for language, or ask a legal question.")
