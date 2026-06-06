@@ -5,7 +5,7 @@ import requests
 import textwrap
 import shutil
 from pathlib import Path
-from fastapi import FastAPI, Request, Query, Form, File, UploadFile
+from fastapi import FastAPI, Request, Query, Form, File, UploadFile, StaticFiles
 from fastapi.responses import PlainTextResponse, HTMLResponse
 from dotenv import load_dotenv
 from twilio.rest import Client
@@ -168,6 +168,9 @@ database.init_db()
 print("Vector store and QA chain ready.")
 
 app = FastAPI()
+# Mount the PDF folder so files are accessible at /pdf/filename.pdf
+app.mount("/pdf", StaticFiles(directory="data/pdfs"), name="pdfs")
+
 
 # ========== Messaging Functions ==========
 def send_meta_message(to: str, text: str):
@@ -1060,6 +1063,65 @@ def show_language_selection(phone: str, provider: str):
     lang = user.get("language", "en")
     text = get_localized("choose_language", lang)
     send_long_message(phone, text, provider, lang=lang)
+
+
+def base_html(title: str, content: str) -> str:
+    """Wrap content in a minimal, clean HTML page."""
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@2/out/water.css">
+</head>
+<body>
+    <h1>{title}</h1>
+    <hr>
+    {content}
+    <hr>
+    <footer><small><a href="/books">← Back to all books</a></small></footer>
+</body>
+</html>"""
+
+def book_list_html() -> str:
+    """Generate an HTML list of available books."""
+    items = []
+    for filename, topics_list in topics.items():
+        stem = Path(filename).stem
+        pdf_link = f"/pdf/{requests.utils.quote(filename)}"
+        detail_link = f"/books/{requests.utils.quote(filename)}"
+        items.append(f'<li><a href="{detail_link}">{stem}</a> '
+                     f'(<a href="{pdf_link}" download>Download PDF</a>)</li>')
+    if not items:
+        return "<p>No books available yet.</p>"
+    return "<ul>" + "\n".join(items) + "</ul>"
+
+def book_detail_html(filename: str) -> str:
+    """Generate an HTML page for a single book's table of contents."""
+    stem = Path(filename).stem
+    if filename not in topics:
+        return base_html(stem, "<p>Book not found.</p>")
+    toc = topics[filename]
+    lines = []
+    for entry in toc:
+        page = entry.get("page", "?")
+        lines.append(f'<li>{entry["title"]} (page {page})</li>')
+    content = f"<h2>Contents</h2><ol>" + "\n".join(lines) + "</ol>"
+    pdf_link = f"/pdf/{requests.utils.quote(filename)}"
+    content += f'<p><a href="{pdf_link}" download>Download full PDF</a></p>'
+    return base_html(stem, content)
+
+
+@app.get("/books", response_class=HTMLResponse)
+async def list_books():
+    html = base_html("Legal Books", book_list_html())
+    return HTMLResponse(content=html)
+
+@app.get("/books/{book_filename:path}", response_class=HTMLResponse)
+async def show_book(book_filename: str):
+    html = book_detail_html(book_filename)
+    return HTMLResponse(content=html)
 
 # --- Admin endpoints ---
 @app.post("/admin/upload")
